@@ -1,10 +1,11 @@
-// B-ETA Passenger API Edge Function — v1.1
+// B-ETA Passenger API Edge Function — v1.2
 // Deploy to: hzmpncdygkeqvoszunfm
 // Public-facing API for the passenger portal. Returns ONLY public bus data.
 // No auth required — passengers see live bus positions.
 //
-// v1.1 — adds distance_remaining_km + eta_minutes to each bus's live block,
-//        computed from the route polyline via the remaining_distance_km SQL function.
+// v1.1 — distance_remaining_km + eta_minutes per bus
+// v1.2 — GET /routes-with-polylines (GeoJSON for map rendering)
+//        GET /stops already exists and now returns all public stops
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import postgres from "https://esm.sh/postgres@3.4.4";
@@ -69,6 +70,22 @@ interface PublicTrip {
   };
 }
 
+interface PublicRoute {
+  route_id: string;
+  name: string;
+  origin: string | null;
+  destination: string | null;
+  polyline: [number, number][] | null;   // array of [lng, lat] as stored
+}
+
+interface PublicStopFull {
+  id: string;
+  name: string;
+  city: string | null;
+  lat: number;
+  lng: number;
+}
+
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
 function ok(body: unknown, status = 200) {
@@ -121,7 +138,6 @@ async function loadStopsForRoute(routeId: string): Promise<StopShape[]> {
   }));
 }
 
-// Build the "active buses" query result with optional segment filtering.
 async function fetchActiveTrips(opts: {
   fromStopId?: string;
   toStopId?: string;
@@ -228,14 +244,15 @@ async function fetchActiveTrips(opts: {
         heading: t.heading,
         last_position_at: t.last_position_at,
         distance_remaining_km:
-          t.distance_remaining_km != null ? Number(t.distance_remaining_km) : null,
+          t.distance_remaining_km != null
+            ? Number(t.distance_remaining_km)
+            : null,
         eta_minutes: t.eta_minutes != null ? Number(t.eta_minutes) : null,
       },
       vehicle: {
         registration_plate: t.vehicle_plate ?? "—",
         capacity: t.vehicle_capacity,
-        passenger_count:
-          t.current_passenger_count ?? t.passenger_count ?? 0,
+        passenger_count: t.current_passenger_count ?? t.passenger_count ?? 0,
       },
       status: t.status,
     };
@@ -252,7 +269,7 @@ async function fetchActiveTrips(opts: {
           to_stop_id: opts.toStopId,
         };
       } catch {
-        // RPC may not exist — ignore
+        // optional
       }
     }
 
@@ -290,7 +307,7 @@ serve(async (req: Request) => {
     if (pathname === "/health" || pathname === "/") {
       return ok({
         status: "B-ETA Passenger API active",
-        version: "1.1.0",
+        version: "1.2.0",
       });
     }
 
@@ -407,19 +424,61 @@ serve(async (req: Request) => {
             t.distance_remaining_km != null
               ? Number(t.distance_remaining_km)
               : null,
-          eta_minutes:
-            t.eta_minutes != null ? Number(t.eta_minutes) : null,
+          eta_minutes: t.eta_minutes != null ? Number(t.eta_minutes) : null,
         },
         vehicle: {
           registration_plate: t.vehicle_plate ?? "—",
           capacity: t.vehicle_capacity,
-          passenger_count:
-            t.current_passenger_count ?? t.passenger_count ?? 0,
+          passenger_count: t.current_passenger_count ?? t.passenger_count ?? 0,
         },
         status: t.status,
       };
 
       return ok(trip);
+    }
+
+    // ── GET /routes-with-polylines ───────────────────────────────────────
+    if (pathname === "/routes-with-polylines") {
+      const rows = await sql<
+        {
+          route_id: string;
+          name: string;
+          origin: string | null;
+          destination: string | null;
+          polyline: string | null;
+        }[]
+      >`
+        select 
+          id as route_id,
+          name,
+          origin,
+          destination,
+          polyline
+        from routes
+        where is_active = true
+          and polyline is not null
+        order by name asc
+      `;
+
+      const result: PublicRoute[] = rows.map((r) => {
+        let parsed: [number, number][] | null = null;
+        try {
+          if (r.polyline) {
+            parsed = JSON.parse(r.polyline) as [number, number][];
+          }
+        } catch {
+          parsed = null;
+        }
+        return {
+          route_id: r.route_id,
+          name: r.name,
+          origin: r.origin,
+          destination: r.destination,
+          polyline: parsed,
+        };
+      });
+
+      return ok({ routes: result, count: result.length });
     }
 
     // ── GET /routes ──────────────────────────────────────────────────────
@@ -456,9 +515,18 @@ serve(async (req: Request) => {
         select id, name, city, lat, lng
         from stops
         where is_public = true
+          and lat is not null
+          and lng is not null
         order by name asc
       `;
-      return ok(rows);
+      const result: PublicStopFull[] = rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        city: r.city,
+        lat: r.lat as number,
+        lng: r.lng as number,
+      }));
+      return ok({ stops: result, count: result.length });
     }
 
     // ── Fallback ─────────────────────────────────────────────────────────
