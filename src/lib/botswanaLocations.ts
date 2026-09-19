@@ -5,6 +5,8 @@
 //   priority 2 = major town (>5000 pop)
 //   priority 1 = significant village
 //   priority 0 = minor village
+//
+// IMPORTANT: Names must be unique. Duplicate names are dropped by the combobox.
 
 export interface BotswanaLocation {
   name: string;
@@ -175,7 +177,6 @@ export const BOTSWANA_LOCATIONS: BotswanaLocation[] = [
   { name: "Zutswa", region: "Kgalagadi", lat: -24.1667, lng: 21.65, priority: 0 },
   { name: "Khuis", region: "Kgalagadi", lat: -26.6667, lng: 21.7667, priority: 0 },
   { name: "Middlepits", region: "Kgalagadi", lat: -26.6167, lng: 22.8333, priority: 0 },
-  { name: "Werda", region: "Kgalagadi", lat: -25.2667, lng: 23.2833, priority: 0 },
   { name: "Omaweneno", region: "Kgalagadi", lat: -25.7, lng: 22.4333, priority: 0 },
   { name: "Kisa", region: "Kgalagadi", lat: -25.35, lng: 22.6, priority: 0 },
   { name: "Maralaleng", region: "Kgalagadi", lat: -25.1167, lng: 22.7833, priority: 0 },
@@ -227,7 +228,6 @@ export const BOTSWANA_LOCATIONS: BotswanaLocation[] = [
   { name: "Habu", region: "North West", lat: -19.45, lng: 22.15, priority: 0 },
   { name: "Nxauxau", region: "North West", lat: -19.7833, lng: 21.6, priority: 0 },
   { name: "Chobokwane", region: "North West", lat: -20.0833, lng: 21.75, priority: 0 },
-  { name: "D'Kar Village", region: "Ghanzi", lat: -21.7833, lng: 21.5167, priority: 0 },
 ];
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -275,14 +275,13 @@ export function findNearestTown(
 }
 
 /**
- * Filter locations by a text query.
- * Match on name OR region, case-insensitive.
- * Orders results by priority (desc), then name (asc).
- * Caps at `limit` results (default 20).
+ * Filter locations by a text query. Match on name OR region, case-insensitive.
+ * Deduplicates by name. Returns results sorted alphabetically.
+ * The `limit` parameter caps the number returned (default 9999 = effectively no cap).
  */
 export function searchLocations(
   query: string,
-  limit = 20
+  limit = 9999
 ): BotswanaLocation[] {
   const clean = query.trim().toLowerCase();
 
@@ -294,10 +293,16 @@ export function searchLocations(
       )
     : [...BOTSWANA_LOCATIONS];
 
-  filtered.sort((a, b) => {
-    if (b.priority !== a.priority) return b.priority - a.priority;
-    return a.name.localeCompare(b.name);
+  // Dedupe by name (keep first occurrence, which is the highest-priority one)
+  const seen = new Set<string>();
+  const unique = filtered.filter((loc) => {
+    if (seen.has(loc.name)) return false;
+    seen.add(loc.name);
+    return true;
   });
 
-  return filtered.slice(0, limit);
+  // Sort alphabetically
+  unique.sort((a, b) => a.name.localeCompare(b.name));
+
+  return unique.slice(0, limit);
 }

@@ -10,6 +10,7 @@ import {
   Clock,
   Route as RouteIcon,
   Crosshair,
+  Ticket,
 } from "lucide-react";
 import type { PublicBus } from "@/lib/passengerApi";
 
@@ -17,6 +18,7 @@ interface BusDetailDrawerProps {
   bus: PublicBus;
   onClose: () => void;
   onCenter?: (bus: PublicBus) => void;
+  onBookSeat?: (bus: PublicBus) => void;
 }
 
 function timeSince(iso: string | null | undefined): string {
@@ -53,16 +55,15 @@ export function BusDetailDrawer({
   bus,
   onClose,
   onCenter,
+  onBookSeat,
 }: BusDetailDrawerProps) {
   const [, setTick] = useState(0);
 
-  // Update "Xs ago" every second
   useEffect(() => {
     const t = setInterval(() => setTick((v) => v + 1), 1000);
     return () => clearInterval(t);
   }, []);
 
-  // Escape key closes
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -92,6 +93,12 @@ export function BusDetailDrawer({
     capacity && capacity > 0
       ? Math.min(100, Math.round((passengers / capacity) * 100))
       : 0;
+
+  // Only allow booking when the bus is in progress and has room
+  const canBook =
+    status === "IN_PROGRESS" &&
+    capacity != null &&
+    passengers < capacity;
 
   return (
     <aside
@@ -253,11 +260,22 @@ export function BusDetailDrawer({
       </div>
 
       {/* Actions */}
-      <div className="mt-auto flex-shrink-0 border-t border-neutral-800 p-4">
+      <div className="mt-auto flex-shrink-0 space-y-2 border-t border-neutral-800 p-4">
+        {onBookSeat && (
+          <button
+            onClick={() => onBookSeat(bus)}
+            disabled={!canBook}
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-orange-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-orange-500 disabled:cursor-not-allowed disabled:bg-neutral-800 disabled:text-neutral-500"
+            title={!canBook ? "Bus is not available for booking" : "Request a seat"}
+          >
+            <Ticket className="h-4 w-4" />
+            {canBook ? "Request seat" : "Booking unavailable"}
+          </button>
+        )}
         {onCenter && (
           <button
             onClick={() => onCenter(bus)}
-            className="flex w-full items-center justify-center gap-2 rounded-lg bg-orange-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-orange-500"
+            className="flex w-full items-center justify-center gap-2 rounded-lg border border-neutral-700 bg-neutral-900 px-4 py-2.5 text-sm font-medium text-neutral-200 transition-colors hover:bg-neutral-800"
           >
             <Crosshair className="h-4 w-4" />
             Center on map

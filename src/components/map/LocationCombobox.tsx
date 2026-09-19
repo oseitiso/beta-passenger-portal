@@ -17,6 +17,11 @@ interface LocationComboboxProps {
   enableGeolocation?: boolean;
 }
 
+// Height of one dropdown item in pixels
+const ITEM_HEIGHT = 38;
+// How many items to show before scrolling starts
+const VISIBLE_ITEMS = 8;
+
 export function LocationCombobox({
   label,
   placeholder,
@@ -33,6 +38,7 @@ export function LocationCombobox({
 
   const wrapperRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
 
   useEffect(() => {
     setQuery(value);
@@ -48,7 +54,22 @@ export function LocationCombobox({
     return () => document.removeEventListener("mousedown", onDocClick);
   }, []);
 
-  const results = useMemo(() => searchLocations(query, 20), [query]);
+  // Get ALL matching locations (already deduped + sorted in searchLocations)
+  const results = useMemo(() => searchLocations(query, 9999), [query]);
+
+  // Reset highlight when query changes
+  useEffect(() => {
+    setHighlight(0);
+  }, [query]);
+
+  // Scroll highlighted item into view when navigating with keyboard
+  useEffect(() => {
+    if (!open || !listRef.current) return;
+    const item = listRef.current.children[highlight] as HTMLElement | undefined;
+    if (item) {
+      item.scrollIntoView({ block: "nearest" });
+    }
+  }, [highlight, open]);
 
   const handleSelect = (loc: BotswanaLocation) => {
     onChange(loc.name);
@@ -123,7 +144,6 @@ export function LocationCombobox({
   const hasValue = query.length > 0;
 
   return (
-    // z-[9999] beats Leaflet's highest pane (z-700) so dropdown appears above the map
     <div ref={wrapperRef} className="relative z-[9999]">
       <label className="mb-1 block text-xs font-medium text-neutral-500">
         {label}
@@ -139,7 +159,6 @@ export function LocationCombobox({
             onChange={(e) => {
               setQuery(e.target.value);
               setOpen(true);
-              setHighlight(0);
             }}
             onFocus={() => setOpen(true)}
             onKeyDown={handleKeyDown}
@@ -187,38 +206,49 @@ export function LocationCombobox({
       )}
 
       {open && (
-        <div className="absolute left-0 right-0 top-full z-[9999] mt-1 max-h-72 overflow-y-auto rounded-lg border border-neutral-700 bg-neutral-900 shadow-2xl">
+        <div className="absolute left-0 right-0 top-full z-[9999] mt-1 overflow-hidden rounded-lg border border-neutral-700 bg-neutral-900 shadow-2xl">
           {results.length === 0 ? (
             <div className="px-3 py-4 text-center text-sm text-neutral-500">
               No locations found for "{query}"
             </div>
           ) : (
-            <ul role="listbox" className="py-1">
-              {results.map((loc, i) => (
-                <li
-                  key={loc.name}
-                  role="option"
-                  aria-selected={i === highlight}
-                  onMouseEnter={() => setHighlight(i)}
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    handleSelect(loc);
-                  }}
-                  className={`cursor-pointer px-3 py-2 text-sm ${
-                    i === highlight
-                      ? "bg-orange-600/20 text-orange-100"
-                      : "text-neutral-200 hover:bg-neutral-800"
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-medium">{loc.name}</span>
-                    <span className="text-xs text-neutral-500">
-                      {loc.region}
-                    </span>
-                  </div>
-                </li>
-              ))}
-            </ul>
+            <>
+              {/* Fixed-height scrollable list — shows 8 items, scrolls for the rest */}
+              <ul
+                ref={listRef}
+                role="listbox"
+                className="overflow-y-auto py-1"
+                style={{ maxHeight: `${ITEM_HEIGHT * VISIBLE_ITEMS}px` }}
+              >
+                {results.map((loc, i) => (
+                  <li
+                    key={loc.name}
+                    role="option"
+                    aria-selected={i === highlight}
+                    onMouseEnter={() => setHighlight(i)}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      handleSelect(loc);
+                    }}
+                    className={`cursor-pointer px-3 py-2 text-sm ${
+                      i === highlight
+                        ? "bg-orange-600/20 text-orange-100"
+                        : "text-neutral-200 hover:bg-neutral-800"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-medium">{loc.name}</span>
+                      <span className="text-xs text-neutral-500">
+                        {loc.region}
+                      </span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              <div className="border-t border-neutral-800 px-3 py-1.5 text-[10px] text-neutral-500">
+                {results.length} result{results.length === 1 ? "" : "s"} · scroll for more
+              </div>
+            </>
           )}
         </div>
       )}

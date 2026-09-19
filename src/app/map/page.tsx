@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
-import { Bus, RefreshCw, List, X, Route as RouteIcon } from "lucide-react";
+import { Bus, RefreshCw, List, X, Route as RouteIcon, Ticket } from "lucide-react";
 import { getActiveBuses, type PublicBus } from "@/lib/passengerApi";
 import {
   getRoutesWithPolylines,
@@ -15,6 +16,14 @@ import { BusDetailDrawer } from "@/components/map/BusDetailDrawer";
 import { BusList } from "@/components/map/BusList";
 import { LocationCombobox } from "@/components/map/LocationCombobox";
 import { FilterControls, type FilterMode } from "@/components/map/FilterControls";
+import { BookingModal } from "@/components/booking/BookingModal";
+import {
+  getActiveBooking,
+  getBookingStatus,
+  cancelBooking,
+  clearActiveBooking,
+  type BookingDetail,
+} from "@/lib/passengerBookingApi";
 
 const PassengerMap = dynamic(
   () =>
@@ -35,6 +44,7 @@ const PassengerMap = dynamic(
 );
 
 export default function MapPage() {
+  const router = useRouter();
   const [buses, setBuses] = useState<PublicBus[]>([]);
   const [routes, setRoutes] = useState<PublicRouteShape[]>([]);
   const [stops, setStops] = useState<PublicStopShape[]>([]);
@@ -50,6 +60,8 @@ export default function MapPage() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [mounted, setMounted] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [bookingBus, setBookingBus] = useState<PublicBus | null>(null);
+  const [activeBooking, setActiveBooking] = useState<BookingDetail | null>(null);
   const [, setTick] = useState(0);
 
   useEffect(() => {
@@ -77,7 +89,36 @@ export default function MapPage() {
     }
   }, []);
 
-  // Fetch routes + stops ONCE on mount (they rarely change)
+  const refreshActiveBooking = useCallback(async () => {
+    const stored = getActiveBooking();
+    if (!stored?.booking_reference) {
+      setActiveBooking(null);
+      return;
+    }
+    try {
+      const result = await getBookingStatus(stored.booking_reference);
+      if (result.success && result.booking) {
+        const terminalStatuses = [
+          "CANCELLED",
+          "EXPIRED",
+          "DECLINED",
+          "NO_SHOW",
+          "COMPLETED",
+        ];
+        if (terminalStatuses.includes(result.booking.handoff_status)) {
+          clearActiveBooking();
+          setActiveBooking(null);
+        } else {
+          setActiveBooking(result.booking);
+        }
+      } else {
+        setActiveBooking(null);
+      }
+    } catch {
+      setActiveBooking(null);
+    }
+  }, []);
+
   useEffect(() => {
     if (!mounted) return;
     let cancelled = false;
@@ -104,10 +145,12 @@ export default function MapPage() {
     if (!mounted) return;
 
     fetchBuses();
+    refreshActiveBooking();
 
     const unsubscribe = subscribeToVehicleState(
       () => {
         fetchBuses();
+        refreshActiveBooking();
       },
       (status) => {
         if (status === "SUBSCRIBED") {
@@ -119,13 +162,16 @@ export default function MapPage() {
       }
     );
 
-    const interval = setInterval(fetchBuses, 30_000);
+    const interval = setInterval(() => {
+      fetchBuses();
+      refreshActiveBooking();
+    }, 15_000);
 
     return () => {
       unsubscribe();
       clearInterval(interval);
     };
-  }, [mounted, fetchBuses]);
+  }, [mounted, fetchBuses, refreshActiveBooking]);
 
   const filterActive = Boolean(origin || destination);
 
@@ -172,6 +218,32 @@ export default function MapPage() {
     setFocusBus({ ...bus });
   };
 
+  const handleOpenBooking = (bus: PublicBus) => {
+    if (activeBooking) {
+      alert(
+        `You already have an active booking (${activeBooking.booking_reference}). Cancel it first or wait for it to expire.`
+      );
+      return;
+    }
+    setBookingBus(bus);
+  };
+
+  const handleBookingSuccess = async () => {
+    await refreshActiveBooking();
+    setTimeout(() => {
+      router.push("/my-booking");
+    }, 1500);
+  };
+
+  const handleCancelActiveBooking = async (handoffId: string) => {
+    const result = await cancelBooking(handoffId);
+    if (!result.success) {
+      throw new Error(result.error ?? "Failed to cancel");
+    }
+    clearActiveBooking();
+    setActiveBooking(null);
+  };
+
   const secondsAgo = lastUpdated
     ? Math.floor((Date.now() - lastUpdated.getTime()) / 1000)
     : 0;
@@ -187,7 +259,6 @@ export default function MapPage() {
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-neutral-950">
-      {/* Header */}
       <header className="flex-shrink-0 border-b border-neutral-800 bg-neutral-900/50 backdrop-blur">
         <div className="flex items-center justify-between px-4 py-2.5">
           <div className="flex items-center gap-3">
@@ -205,6 +276,13 @@ export default function MapPage() {
           </div>
 
           <div className="flex items-center gap-3 text-sm">
+            <a
+              href="/my-booking"
+              className="hidden items-center gap-1.5 rounded-lg border border-neutral-700 px-3 py-1.5 text-xs text-neutral-300 hover:bg-neutral-800 sm:flex"
+            >
+              <Ticket className="h-3.5 w-3.5" />
+              My Booking
+            </a>
             <span className="hidden items-center gap-1.5 sm:flex">
               <span className="h-2 w-2 animate-pulse rounded-full bg-green-500" />
               <span className="text-xs text-neutral-400">Live</span>
@@ -226,7 +304,6 @@ export default function MapPage() {
         </div>
       </header>
 
-      {/* Filters row */}
       <div className="flex-shrink-0 border-b border-neutral-800 bg-neutral-950 px-4 py-3">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <LocationCombobox
@@ -245,7 +322,6 @@ export default function MapPage() {
         </div>
       </div>
 
-      {/* Filter status bar */}
       <div className="flex-shrink-0 border-b border-neutral-800 bg-neutral-950 px-4 py-2">
         <div className="flex flex-wrap items-center gap-3">
           <FilterControls
@@ -257,7 +333,6 @@ export default function MapPage() {
             onClear={clearFilters}
           />
 
-          {/* Layer toggles */}
           <div className="ml-auto flex items-center gap-2 text-xs">
             <button
               onClick={() => setShowRoutes((v) => !v)}
@@ -287,14 +362,15 @@ export default function MapPage() {
         </div>
       </div>
 
-      {/* Main content */}
       <div className="flex min-h-0 flex-1">
         {sidebarOpen && selectedBus === null && (
           <aside className="hidden w-80 flex-shrink-0 overflow-hidden border-r border-neutral-800 bg-neutral-950 lg:block">
             <BusList
               buses={sidebarBuses}
               selectedBusId={selectedBusId}
+              activeBooking={activeBooking}
               onSelectBus={handleSelectBus}
+              onCancelBooking={handleCancelActiveBooking}
               loading={loading}
             />
           </aside>
@@ -343,7 +419,9 @@ export default function MapPage() {
               <BusList
                 buses={sidebarBuses}
                 selectedBusId={selectedBusId}
+                activeBooking={activeBooking}
                 onSelectBus={handleSelectBus}
+                onCancelBooking={handleCancelActiveBooking}
                 loading={loading}
               />
             </div>
@@ -372,13 +450,14 @@ export default function MapPage() {
               bus={selectedBus}
               onClose={handleCloseDetail}
               onCenter={handleCenter}
+              onBookSeat={handleOpenBooking}
             />
           </div>
         )}
       </div>
 
       {selectedBus !== null && (
-        <div className="fixed inset-0 z-40 lg:hidden">
+        <div className="fixed inset-0 lg:hidden" style={{ zIndex: 9000 }}>
           <div
             className="absolute inset-0 bg-black/60"
             onClick={handleCloseDetail}
@@ -388,9 +467,22 @@ export default function MapPage() {
               bus={selectedBus}
               onClose={handleCloseDetail}
               onCenter={handleCenter}
+              onBookSeat={handleOpenBooking}
             />
           </div>
         </div>
+      )}
+
+      {bookingBus && (
+        <BookingModal
+          bus={bookingBus}
+          fromStopId="33333333-0000-0000-0001-000000000004"
+          fromStopName={bookingBus.route?.origin ?? "Your stop"}
+          toStopId="33333333-0000-0000-0001-000000000005"
+          toStopName={bookingBus.route?.destination ?? "Your destination"}
+          onClose={() => setBookingBus(null)}
+          onSuccess={handleBookingSuccess}
+        />
       )}
     </div>
   );
