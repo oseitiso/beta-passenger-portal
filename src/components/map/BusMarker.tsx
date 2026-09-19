@@ -1,59 +1,73 @@
 "use client";
 
-import { Marker } from "react-leaflet";
-import { divIcon } from "leaflet";
+import { Marker, Popup } from "react-leaflet";
+import L from "leaflet";
 import type { PublicBus } from "@/lib/passengerApi";
 
-function minutesSince(iso: string | null): number {
-  if (!iso) return Infinity;
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return Infinity;
-  return Math.floor((Date.now() - d.getTime()) / 60000);
+interface BusMarkerProps {
+  bus: PublicBus;
+  selected: boolean;
+  onSelect: (bus: PublicBus) => void;
 }
 
-function busIcon(stale: boolean, veryStale: boolean) {
-  const colour = veryStale
-    ? "bg-neutral-600"
-    : stale
-    ? "bg-amber-500"
-    : "bg-green-500";
-
-  return divIcon({
+// Custom bus icon using inline SVG (orange B-ETA brand color)
+const createBusIcon = (selected: boolean) =>
+  L.divIcon({
+    className: "",
     html: `
       <div style="
-        width: 34px; height: 34px;
+        width: 36px; height: 36px;
+        background: ${selected ? "#f97316" : "#ea580c"};
+        border: 2px solid ${selected ? "#fff" : "#f97316"};
         border-radius: 50%;
         display: flex; align-items: center; justify-content: center;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.5);
-        border: 2px solid white;
-        font-weight: 900; font-size: 11px;
-        font-family: system-ui, sans-serif;
-        color: white;
-      " class="${colour}">🚌</div>
+        box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+        transform: ${selected ? "scale(1.15)" : "scale(1)"};
+        transition: transform 0.2s;
+      ">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M8 6v6"></path><path d="M15 6v6"></path>
+          <path d="M2 12h19.6"></path>
+          <path d="M18 18h3s.5-1.7.8-2.8c.1-.4.2-.8.2-1.2 0-.4-.1-.8-.2-1.2l-1.4-5C20.1 6.8 19.1 6 18 6H4a2 2 0 0 0-2 2v10h3"></path>
+          <circle cx="7" cy="18" r="2"></circle>
+          <circle cx="16" cy="18" r="2"></circle>
+        </svg>
+      </div>
     `,
-    className: "",
-    iconSize: [34, 34],
-    iconAnchor: [17, 17],
+    iconSize: [36, 36],
+    iconAnchor: [18, 18],
+    popupAnchor: [0, -18],
   });
-}
 
-export function BusMarker({
-  bus,
-  onClick,
-}: {
-  bus: PublicBus;
-  onClick: () => void;
-}) {
-  if (bus.live.latitude == null || bus.live.longitude == null) return null;
+export function BusMarker({ bus, selected, onSelect }: BusMarkerProps) {
+  // Skip rendering if no live position yet
+  const lat = bus.live?.latitude;
+  const lng = bus.live?.longitude;
+  if (lat == null || lng == null) return null;
 
-  const stale = minutesSince(bus.live.last_position_at) > 5;
-  const veryStale = minutesSince(bus.live.last_position_at) > 30;
+  const plate = bus.vehicle?.registration_plate ?? "Unknown";
+  const origin = bus.route?.origin ?? "—";
+  const destination = bus.route?.destination ?? "—";
 
   return (
     <Marker
-      position={[bus.live.latitude, bus.live.longitude]}
-      icon={busIcon(stale, veryStale)}
-      eventHandlers={{ click: onClick }}
-    />
+      position={[lat, lng]}
+      icon={createBusIcon(selected)}
+      eventHandlers={{
+        click: () => onSelect(bus),
+      }}
+    >
+      <Popup>
+        <div className="text-sm">
+          <strong>{plate}</strong>
+          <br />
+          {origin} → {destination}
+          <br />
+          <span className="text-xs text-neutral-500">
+            {bus.status ?? "active"}
+          </span>
+        </div>
+      </Popup>
+    </Marker>
   );
 }
