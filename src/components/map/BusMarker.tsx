@@ -7,23 +7,28 @@ import type { PublicBus } from "@/lib/passengerApi";
 interface BusMarkerProps {
   bus: PublicBus;
   selected: boolean;
+  dimmed?: boolean;
   onSelect: (bus: PublicBus) => void;
 }
 
-// Custom bus icon using inline SVG (orange B-ETA brand color)
-const createBusIcon = (selected: boolean) =>
-  L.divIcon({
+const createBusIcon = (selected: boolean, dimmed: boolean) => {
+  const opacity = dimmed ? "0.35" : "1";
+  const bg = dimmed ? "#525252" : selected ? "#f97316" : "#ea580c";
+  const border = dimmed ? "#404040" : selected ? "#fff" : "#f97316";
+
+  return L.divIcon({
     className: "",
     html: `
       <div style="
         width: 36px; height: 36px;
-        background: ${selected ? "#f97316" : "#ea580c"};
-        border: 2px solid ${selected ? "#fff" : "#f97316"};
+        background: ${bg};
+        border: 2px solid ${border};
         border-radius: 50%;
         display: flex; align-items: center; justify-content: center;
         box-shadow: 0 2px 8px rgba(0,0,0,0.5);
         transform: ${selected ? "scale(1.15)" : "scale(1)"};
-        transition: transform 0.2s;
+        transition: transform 0.2s, opacity 0.2s;
+        opacity: ${opacity};
       ">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M8 6v6"></path><path d="M15 6v6"></path>
@@ -38,9 +43,31 @@ const createBusIcon = (selected: boolean) =>
     iconAnchor: [18, 18],
     popupAnchor: [0, -18],
   });
+};
 
-export function BusMarker({ bus, selected, onSelect }: BusMarkerProps) {
-  // Skip rendering if no live position yet
+function estimateEtaMinutes(bus: PublicBus): number | null {
+  const speed = bus.live?.speed_kph ?? 0;
+  if (speed < 5) return null;
+  const assumedRemainingKm = 60;
+  return Math.round((assumedRemainingKm / speed) * 60);
+}
+
+function timeSince(iso: string | null | undefined): string {
+  if (!iso) return "unknown";
+  const seconds = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (seconds < 10) return "just now";
+  if (seconds < 60) return `${seconds}s ago`;
+  const mins = Math.floor(seconds / 60);
+  if (mins < 60) return `${mins}m ago`;
+  return `${Math.floor(mins / 60)}h ago`;
+}
+
+export function BusMarker({
+  bus,
+  selected,
+  dimmed = false,
+  onSelect,
+}: BusMarkerProps) {
   const lat = bus.live?.latitude;
   const lng = bus.live?.longitude;
   if (lat == null || lng == null) return null;
@@ -48,24 +75,74 @@ export function BusMarker({ bus, selected, onSelect }: BusMarkerProps) {
   const plate = bus.vehicle?.registration_plate ?? "Unknown";
   const origin = bus.route?.origin ?? "—";
   const destination = bus.route?.destination ?? "—";
+  const speed = Math.round(bus.live?.speed_kph ?? 0);
+  const passengers = bus.vehicle?.passenger_count ?? 0;
+  const capacity = bus.vehicle?.capacity ?? null;
+  const eta = estimateEtaMinutes(bus);
+  const lastSeen = timeSince(bus.live?.last_position_at);
 
   return (
     <Marker
       position={[lat, lng]}
-      icon={createBusIcon(selected)}
+      icon={createBusIcon(selected, dimmed)}
       eventHandlers={{
         click: () => onSelect(bus),
       }}
     >
       <Popup>
-        <div className="text-sm">
-          <strong>{plate}</strong>
-          <br />
-          {origin} → {destination}
-          <br />
-          <span className="text-xs text-neutral-500">
-            {bus.status ?? "active"}
-          </span>
+        <div style={{ minWidth: 200, fontFamily: "system-ui, sans-serif" }}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>
+            {plate}
+          </div>
+          <div
+            style={{
+              color: "#ea580c",
+              fontWeight: 600,
+              fontSize: 12,
+              marginBottom: 8,
+            }}
+          >
+            {origin} → {destination}
+          </div>
+
+          <div
+            style={{
+              display: "flex",
+              gap: 12,
+              fontSize: 12,
+              color: "#333",
+              marginBottom: 6,
+            }}
+          >
+            <div>
+              <div style={{ color: "#888", fontSize: 10 }}>SPEED</div>
+              <div style={{ fontWeight: 600 }}>{speed} km/h</div>
+            </div>
+            <div>
+              <div style={{ color: "#888", fontSize: 10 }}>PASSENGERS</div>
+              <div style={{ fontWeight: 600 }}>
+                {passengers}
+                {capacity ? ` / ${capacity}` : ""}
+              </div>
+            </div>
+            {eta != null && (
+              <div>
+                <div style={{ color: "#888", fontSize: 10 }}>ETA</div>
+                <div style={{ fontWeight: 600 }}>~{eta} min</div>
+              </div>
+            )}
+          </div>
+
+          <div
+            style={{
+              fontSize: 10,
+              color: "#888",
+              borderTop: "1px solid #eee",
+              paddingTop: 4,
+            }}
+          >
+            Last update: {lastSeen} · {bus.status ?? "active"}
+          </div>
         </div>
       </Popup>
     </Marker>
