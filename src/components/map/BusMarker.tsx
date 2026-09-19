@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Marker, Popup } from "react-leaflet";
 import L from "leaflet";
 import type { PublicBus } from "@/lib/passengerApi";
@@ -16,28 +17,56 @@ const createBusIcon = (selected: boolean, dimmed: boolean) => {
   const bg = dimmed ? "#525252" : selected ? "#f97316" : "#ea580c";
   const border = dimmed ? "#404040" : selected ? "#fff" : "#f97316";
 
+  // Pulse animation only when selected
+  const pulseHtml = selected
+    ? `
+      <span style="
+        position: absolute;
+        inset: -6px;
+        border-radius: 50%;
+        background: #f97316;
+        opacity: 0.5;
+        animation: busPulse 1.5s ease-out infinite;
+        pointer-events: none;
+      "></span>
+    `
+    : "";
+
   return L.divIcon({
     className: "",
     html: `
       <div style="
+        position: relative;
         width: 36px; height: 36px;
-        background: ${bg};
-        border: 2px solid ${border};
-        border-radius: 50%;
-        display: flex; align-items: center; justify-content: center;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.5);
-        transform: ${selected ? "scale(1.15)" : "scale(1)"};
-        transition: transform 0.2s, opacity 0.2s;
-        opacity: ${opacity};
       ">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M8 6v6"></path><path d="M15 6v6"></path>
-          <path d="M2 12h19.6"></path>
-          <path d="M18 18h3s.5-1.7.8-2.8c.1-.4.2-.8.2-1.2 0-.4-.1-.8-.2-1.2l-1.4-5C20.1 6.8 19.1 6 18 6H4a2 2 0 0 0-2 2v10h3"></path>
-          <circle cx="7" cy="18" r="2"></circle>
-          <circle cx="16" cy="18" r="2"></circle>
-        </svg>
+        ${pulseHtml}
+        <div style="
+          position: absolute;
+          inset: 0;
+          background: ${bg};
+          border: 2px solid ${border};
+          border-radius: 50%;
+          display: flex; align-items: center; justify-content: center;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+          transform: ${selected ? "scale(1.15)" : "scale(1)"};
+          transition: transform 0.2s, opacity 0.2s;
+          opacity: ${opacity};
+        ">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M8 6v6"></path><path d="M15 6v6"></path>
+            <path d="M2 12h19.6"></path>
+            <path d="M18 18h3s.5-1.7.8-2.8c.1-.4.2-.8.2-1.2 0-.4-.1-.8-.2-1.2l-1.4-5C20.1 6.8 19.1 6 18 6H4a2 2 0 0 0-2 2v10h3"></path>
+            <circle cx="7" cy="18" r="2"></circle>
+            <circle cx="16" cy="18" r="2"></circle>
+          </svg>
+        </div>
       </div>
+      <style>
+        @keyframes busPulse {
+          0% { transform: scale(1); opacity: 0.5; }
+          100% { transform: scale(1.8); opacity: 0; }
+        }
+      </style>
     `,
     iconSize: [36, 36],
     iconAnchor: [18, 18],
@@ -55,7 +84,9 @@ function timeSince(iso: string | null | undefined): string {
   return `${Math.floor(mins / 60)}h ago`;
 }
 
-function formatArrivalClock(etaMinutes: number | null | undefined): string | null {
+function formatArrivalClock(
+  etaMinutes: number | null | undefined
+): string | null {
   if (etaMinutes == null || etaMinutes <= 0) return null;
   const arrival = new Date(Date.now() + etaMinutes * 60_000);
   return arrival.toLocaleTimeString([], {
@@ -79,6 +110,13 @@ export function BusMarker({
   dimmed = false,
   onSelect,
 }: BusMarkerProps) {
+  // Force re-render every second so ETA + "Xs ago" stay fresh in popup
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setTick((v) => v + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+
   const lat = bus.live?.latitude;
   const lng = bus.live?.longitude;
   if (lat == null || lng == null) return null;
@@ -119,7 +157,6 @@ export function BusMarker({
             {origin} → {destination}
           </div>
 
-          {/* ETA highlighted row */}
           {etaHuman && (
             <div
               style={{
@@ -130,7 +167,9 @@ export function BusMarker({
                 marginBottom: 8,
               }}
             >
-              <div style={{ color: "#9a3412", fontSize: 10, fontWeight: 600 }}>
+              <div
+                style={{ color: "#9a3412", fontSize: 10, fontWeight: 600 }}
+              >
                 ARRIVES IN
               </div>
               <div

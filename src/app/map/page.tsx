@@ -2,8 +2,14 @@
 
 import { useEffect, useState, useCallback, useMemo } from "react";
 import dynamic from "next/dynamic";
-import { Bus, RefreshCw, List, X } from "lucide-react";
+import { Bus, RefreshCw, List, X, Route as RouteIcon } from "lucide-react";
 import { getActiveBuses, type PublicBus } from "@/lib/passengerApi";
+import {
+  getRoutesWithPolylines,
+  getStops,
+  type PublicRouteShape,
+  type PublicStopShape,
+} from "@/lib/routesApi";
 import { subscribeToVehicleState } from "@/lib/realtime";
 import { BusDetailDrawer } from "@/components/map/BusDetailDrawer";
 import { BusList } from "@/components/map/BusList";
@@ -30,6 +36,8 @@ const PassengerMap = dynamic(
 
 export default function MapPage() {
   const [buses, setBuses] = useState<PublicBus[]>([]);
+  const [routes, setRoutes] = useState<PublicRouteShape[]>([]);
+  const [stops, setStops] = useState<PublicStopShape[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedBus, setSelectedBus] = useState<PublicBus | null>(null);
@@ -37,6 +45,8 @@ export default function MapPage() {
   const [origin, setOrigin] = useState("");
   const [destination, setDestination] = useState("");
   const [filterMode, setFilterMode] = useState<FilterMode>("hide");
+  const [showRoutes, setShowRoutes] = useState(true);
+  const [showStops, setShowStops] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [mounted, setMounted] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -67,6 +77,29 @@ export default function MapPage() {
     }
   }, []);
 
+  // Fetch routes + stops ONCE on mount (they rarely change)
+  useEffect(() => {
+    if (!mounted) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const [routesData, stopsData] = await Promise.all([
+          getRoutesWithPolylines(),
+          getStops(),
+        ]);
+        if (!cancelled) {
+          setRoutes(routesData);
+          setStops(stopsData);
+        }
+      } catch (e) {
+        console.error("[map] Failed to load routes/stops", e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [mounted]);
+
   useEffect(() => {
     if (!mounted) return;
 
@@ -96,7 +129,6 @@ export default function MapPage() {
 
   const filterActive = Boolean(origin || destination);
 
-  // Compute which buses match the filter (independent of display mode)
   const matchingBusIds = useMemo(() => {
     const set = new Set<string>();
     for (const b of buses) {
@@ -108,14 +140,12 @@ export default function MapPage() {
     return set;
   }, [buses, origin, destination]);
 
-  // Buses actually rendered on the map (hide mode removes non-matching)
   const visibleBuses = useMemo(() => {
     if (!filterActive) return buses;
     if (filterMode === "dim") return buses;
     return buses.filter((b) => matchingBusIds.has(b.trip_id));
   }, [buses, filterActive, filterMode, matchingBusIds]);
 
-  // Buses shown in the sidebar (always filtered — sidebar is search-centric)
   const sidebarBuses = useMemo(() => {
     if (!filterActive) return buses;
     return buses.filter((b) => matchingBusIds.has(b.trip_id));
@@ -157,7 +187,7 @@ export default function MapPage() {
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-neutral-950">
-      {/* ── Header ── */}
+      {/* Header */}
       <header className="flex-shrink-0 border-b border-neutral-800 bg-neutral-900/50 backdrop-blur">
         <div className="flex items-center justify-between px-4 py-2.5">
           <div className="flex items-center gap-3">
@@ -196,7 +226,7 @@ export default function MapPage() {
         </div>
       </header>
 
-      {/* ── Filters row ── */}
+      {/* Filters row */}
       <div className="flex-shrink-0 border-b border-neutral-800 bg-neutral-950 px-4 py-3">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <LocationCombobox
@@ -215,19 +245,49 @@ export default function MapPage() {
         </div>
       </div>
 
-      {/* ── Filter status bar ── */}
+      {/* Filter status bar */}
       <div className="flex-shrink-0 border-b border-neutral-800 bg-neutral-950 px-4 py-2">
-        <FilterControls
-          visibleCount={matchingBusIds.size}
-          totalCount={buses.length}
-          filterActive={filterActive}
-          mode={filterMode}
-          onModeChange={setFilterMode}
-          onClear={clearFilters}
-        />
+        <div className="flex flex-wrap items-center gap-3">
+          <FilterControls
+            visibleCount={matchingBusIds.size}
+            totalCount={buses.length}
+            filterActive={filterActive}
+            mode={filterMode}
+            onModeChange={setFilterMode}
+            onClear={clearFilters}
+          />
+
+          {/* Layer toggles */}
+          <div className="ml-auto flex items-center gap-2 text-xs">
+            <button
+              onClick={() => setShowRoutes((v) => !v)}
+              className={`flex items-center gap-1.5 rounded-md border px-2 py-1 transition-colors ${
+                showRoutes
+                  ? "border-orange-600/50 bg-orange-600/10 text-orange-400"
+                  : "border-neutral-700 text-neutral-500 hover:bg-neutral-800"
+              }`}
+              title="Toggle route lines"
+            >
+              <RouteIcon className="h-3 w-3" />
+              Routes
+            </button>
+            <button
+              onClick={() => setShowStops((v) => !v)}
+              className={`flex items-center gap-1.5 rounded-md border px-2 py-1 transition-colors ${
+                showStops
+                  ? "border-orange-600/50 bg-orange-600/10 text-orange-400"
+                  : "border-neutral-700 text-neutral-500 hover:bg-neutral-800"
+              }`}
+              title="Toggle stop markers"
+            >
+              <span className="h-2 w-2 rounded-full bg-current" />
+              Stops
+            </button>
+          </div>
+        </div>
       </div>
 
-      {/* ── Main content ── */}
+      {/* Main content */}
       <div className="flex min-h-0 flex-1">
         {sidebarOpen && selectedBus === null && (
           <aside className="hidden w-80 flex-shrink-0 overflow-hidden border-r border-neutral-800 bg-neutral-950 lg:block">
@@ -248,12 +308,16 @@ export default function MapPage() {
           ) : (
             <PassengerMap
               buses={visibleBuses}
+              routes={routes}
+              stops={stops}
               matchingBusIds={matchingBusIds}
               selectedBusId={selectedBusId}
               onSelectBus={handleSelectBus}
               focusBus={focusBus}
               layoutKey={layoutKey}
               dimNonMatching={filterMode === "dim"}
+              showRoutes={showRoutes}
+              showStops={showStops}
             />
           )}
 

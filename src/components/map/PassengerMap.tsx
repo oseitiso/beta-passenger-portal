@@ -13,18 +13,27 @@ import "leaflet.markercluster/dist/MarkerCluster.Default.css";
 import "leaflet.markercluster";
 import L from "leaflet";
 import type { PublicBus } from "@/lib/passengerApi";
+import type {
+  PublicRouteShape,
+  PublicStopShape,
+} from "@/lib/routesApi";
 import { BusMarker } from "./BusMarker";
+import { RouteLine } from "./RouteLine";
+import { StopMarker } from "./StopMarker";
 
 interface PassengerMapProps {
   buses: PublicBus[];
-  /** Buses that match the current filter (subset of `buses` when filter active) */
+  routes?: PublicRouteShape[];
+  stops?: PublicStopShape[];
   matchingBusIds?: Set<string>;
   selectedBusId: string | null;
   onSelectBus: (bus: PublicBus) => void;
   focusBus?: PublicBus | null;
   layoutKey?: string | number;
-  /** When true and a filter is active, non-matching buses are shown dimmed */
   dimNonMatching?: boolean;
+  /** Toggle visibility of route lines and stops */
+  showRoutes?: boolean;
+  showStops?: boolean;
 }
 
 const DEFAULT_CENTER: [number, number] = [-24.6282, 25.9231];
@@ -69,60 +78,18 @@ function MapResizeController({ layoutKey }: { layoutKey?: string | number }) {
   return null;
 }
 
-/**
- * Wraps the bus markers in a Leaflet marker cluster group.
- * Renders BusMarker components as children — React-Leaflet doesn't
- * natively support clustering, so we render our own markers and let
- * Leaflet's clustering plugin manage grouping via imperative code.
- *
- * For simplicity and because our dataset is small, we render the
- * markers directly without the cluster group. The clustering CSS is
- * loaded for future use. When the fleet grows past ~50 buses, we can
- * wire up MarkerClusterGroup properly.
- */
-function BusMarkerLayer({
-  buses,
-  selectedBusId,
-  matchingBusIds,
-  dimNonMatching,
-  onSelectBus,
-}: {
-  buses: PublicBus[];
-  selectedBusId: string | null;
-  matchingBusIds?: Set<string>;
-  dimNonMatching?: boolean;
-  onSelectBus: (bus: PublicBus) => void;
-}) {
-  return (
-    <>
-      {buses.map((bus) => {
-        const isSelected = bus.trip_id === selectedBusId;
-        const isMatching =
-          !matchingBusIds || matchingBusIds.has(bus.trip_id);
-        const dimmed = Boolean(dimNonMatching && matchingBusIds && !isMatching);
-
-        return (
-          <BusMarker
-            key={bus.trip_id}
-            bus={bus}
-            selected={isSelected}
-            dimmed={dimmed}
-            onSelect={onSelectBus}
-          />
-        );
-      })}
-    </>
-  );
-}
-
 export function PassengerMap({
   buses,
+  routes = [],
+  stops = [],
   matchingBusIds,
   selectedBusId,
   onSelectBus,
   focusBus,
   layoutKey,
   dimNonMatching = false,
+  showRoutes = true,
+  showStops = true,
 }: PassengerMapProps) {
   return (
     <MapContainer
@@ -139,16 +106,35 @@ export function PassengerMap({
         maxZoom={19}
       />
 
+      {/* Route lines (drawn first, so they sit under markers) */}
+      {showRoutes &&
+        routes.map((route) => (
+          <RouteLine key={route.route_id} route={route} />
+        ))}
+
+      {/* Stop markers (small dots) */}
+      {showStops &&
+        stops.map((stop) => <StopMarker key={stop.id} stop={stop} />)}
+
       <MapFocusController bus={focusBus} />
       <MapResizeController layoutKey={layoutKey} />
 
-      <BusMarkerLayer
-        buses={buses}
-        selectedBusId={selectedBusId}
-        matchingBusIds={matchingBusIds}
-        dimNonMatching={dimNonMatching}
-        onSelectBus={onSelectBus}
-      />
+      {/* Buses (on top of everything) */}
+      {buses.map((bus) => {
+        const isSelected = bus.trip_id === selectedBusId;
+        const isMatching = !matchingBusIds || matchingBusIds.has(bus.trip_id);
+        const dimmed = Boolean(dimNonMatching && matchingBusIds && !isMatching);
+
+        return (
+          <BusMarker
+            key={bus.trip_id}
+            bus={bus}
+            selected={isSelected}
+            dimmed={dimmed}
+            onSelect={onSelectBus}
+          />
+        );
+      })}
     </MapContainer>
   );
 }
