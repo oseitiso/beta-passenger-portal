@@ -45,13 +45,6 @@ const createBusIcon = (selected: boolean, dimmed: boolean) => {
   });
 };
 
-function estimateEtaMinutes(bus: PublicBus): number | null {
-  const speed = bus.live?.speed_kph ?? 0;
-  if (speed < 5) return null;
-  const assumedRemainingKm = 60;
-  return Math.round((assumedRemainingKm / speed) * 60);
-}
-
 function timeSince(iso: string | null | undefined): string {
   if (!iso) return "unknown";
   const seconds = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
@@ -60,6 +53,24 @@ function timeSince(iso: string | null | undefined): string {
   const mins = Math.floor(seconds / 60);
   if (mins < 60) return `${mins}m ago`;
   return `${Math.floor(mins / 60)}h ago`;
+}
+
+function formatArrivalClock(etaMinutes: number | null | undefined): string | null {
+  if (etaMinutes == null || etaMinutes <= 0) return null;
+  const arrival = new Date(Date.now() + etaMinutes * 60_000);
+  return arrival.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
+function formatEtaHuman(etaMinutes: number | null | undefined): string | null {
+  if (etaMinutes == null || etaMinutes <= 0) return null;
+  if (etaMinutes < 60) return `${Math.round(etaMinutes)} min`;
+  const h = Math.floor(etaMinutes / 60);
+  const m = Math.round(etaMinutes % 60);
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
 }
 
 export function BusMarker({
@@ -78,7 +89,10 @@ export function BusMarker({
   const speed = Math.round(bus.live?.speed_kph ?? 0);
   const passengers = bus.vehicle?.passenger_count ?? 0;
   const capacity = bus.vehicle?.capacity ?? null;
-  const eta = estimateEtaMinutes(bus);
+  const remainingKm = bus.live?.distance_remaining_km ?? null;
+  const etaMin = bus.live?.eta_minutes ?? null;
+  const etaHuman = formatEtaHuman(etaMin);
+  const etaClock = formatArrivalClock(etaMin);
   const lastSeen = timeSince(bus.live?.last_position_at);
 
   return (
@@ -90,7 +104,7 @@ export function BusMarker({
       }}
     >
       <Popup>
-        <div style={{ minWidth: 200, fontFamily: "system-ui, sans-serif" }}>
+        <div style={{ minWidth: 220, fontFamily: "system-ui, sans-serif" }}>
           <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>
             {plate}
           </div>
@@ -105,10 +119,50 @@ export function BusMarker({
             {origin} → {destination}
           </div>
 
+          {/* ETA highlighted row */}
+          {etaHuman && (
+            <div
+              style={{
+                background: "#fff7ed",
+                border: "1px solid #fed7aa",
+                borderRadius: 6,
+                padding: "6px 8px",
+                marginBottom: 8,
+              }}
+            >
+              <div style={{ color: "#9a3412", fontSize: 10, fontWeight: 600 }}>
+                ARRIVES IN
+              </div>
+              <div
+                style={{
+                  color: "#ea580c",
+                  fontSize: 15,
+                  fontWeight: 700,
+                  lineHeight: 1.2,
+                }}
+              >
+                {etaHuman}
+                {etaClock && (
+                  <span
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 500,
+                      color: "#c2410c",
+                      marginLeft: 6,
+                    }}
+                  >
+                    · {etaClock}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
           <div
             style={{
-              display: "flex",
-              gap: 12,
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: 8,
               fontSize: 12,
               color: "#333",
               marginBottom: 6,
@@ -119,18 +173,18 @@ export function BusMarker({
               <div style={{ fontWeight: 600 }}>{speed} km/h</div>
             </div>
             <div>
+              <div style={{ color: "#888", fontSize: 10 }}>REMAINING</div>
+              <div style={{ fontWeight: 600 }}>
+                {remainingKm != null ? `${remainingKm.toFixed(0)} km` : "—"}
+              </div>
+            </div>
+            <div style={{ gridColumn: "1 / -1" }}>
               <div style={{ color: "#888", fontSize: 10 }}>PASSENGERS</div>
               <div style={{ fontWeight: 600 }}>
                 {passengers}
                 {capacity ? ` / ${capacity}` : ""}
               </div>
             </div>
-            {eta != null && (
-              <div>
-                <div style={{ color: "#888", fontSize: 10 }}>ETA</div>
-                <div style={{ fontWeight: 600 }}>~{eta} min</div>
-              </div>
-            )}
           </div>
 
           <div

@@ -1,11 +1,10 @@
-// B-ETA Passenger API Edge Function — v1.0
+// B-ETA Passenger API Edge Function — v1.1
 // Deploy to: hzmpncdygkeqvoszunfm
 // Public-facing API for the passenger portal. Returns ONLY public bus data.
 // No auth required — passengers see live bus positions.
 //
-// NEVER return: driver_id, driver_name, driver_phone, operator_id,
-// individual passenger identities, booking history, operator notes,
-// internal GPS metadata.
+// v1.1 — adds distance_remaining_km + eta_minutes to each bus's live block,
+//        computed from the route polyline via the remaining_distance_km SQL function.
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import postgres from "https://esm.sh/postgres@3.4.4";
@@ -54,6 +53,8 @@ interface PublicTrip {
     speed_kph: number | null;
     heading: number | null;
     last_position_at: string | null;
+    distance_remaining_km: number | null;
+    eta_minutes: number | null;
   };
   vehicle: {
     registration_plate: string;
@@ -125,7 +126,6 @@ async function fetchActiveTrips(opts: {
   fromStopId?: string;
   toStopId?: string;
 }): Promise<PublicTrip[]> {
-  // Base: all IN_PROGRESS trips with their vehicle state + vehicle + route
   const trips = await sql<
     {
       trip_id: string;
@@ -145,6 +145,8 @@ async function fetchActiveTrips(opts: {
       speed_kph: number | null;
       heading: number | null;
       last_position_at: string | null;
+      distance_remaining_km: number | null;
+      eta_minutes: number | null;
     }[]
   >`
     select
@@ -164,7 +166,27 @@ async function fetchActiveTrips(opts: {
       vcs.longitude as lng,
       vcs.speed_kph,
       vcs.heading,
-      vcs.last_position_at
+      vcs.last_position_at,
+      case
+        when t.route_id is not null
+             and vcs.latitude is not null
+             and vcs.longitude is not null then
+          public.remaining_distance_km(t.route_id, vcs.latitude, vcs.longitude)
+        else null
+      end as distance_remaining_km,
+      case
+        when t.route_id is not null
+             and vcs.latitude is not null
+             and vcs.longitude is not null
+             and vcs.speed_kph is not null
+             and vcs.speed_kph > 5 then
+          round(
+            (public.remaining_distance_km(t.route_id, vcs.latitude, vcs.longitude)
+             / vcs.speed_kph * 60)::numeric,
+            0
+          )
+        else null
+      end as eta_minutes
     from trips t
     left join routes r on r.id = t.route_id
     left join vehicles v on v.id = t.vehicle_id
@@ -173,10 +195,7 @@ async function fetchActiveTrips(opts: {
     order by t.scheduled_departure desc
   `;
 
-  // Build the projection
   const out: PublicTrip[] = [];
-
-  // Cache stops per route to avoid N+1 lookups
   const stopsCache = new Map<string, StopShape[]>();
 
   for (const t of trips) {
@@ -208,6 +227,9 @@ async function fetchActiveTrips(opts: {
         speed_kph: t.speed_kph,
         heading: t.heading,
         last_position_at: t.last_position_at,
+        distance_remaining_km:
+          t.distance_remaining_km != null ? Number(t.distance_remaining_km) : null,
+        eta_minutes: t.eta_minutes != null ? Number(t.eta_minutes) : null,
       },
       vehicle: {
         registration_plate: t.vehicle_plate ?? "—",
@@ -218,7 +240,6 @@ async function fetchActiveTrips(opts: {
       status: t.status,
     };
 
-    // Optional: segment availability if from/to provided
     if (opts.fromStopId && opts.toStopId) {
       try {
         const rows = await sql<
@@ -231,14 +252,13 @@ async function fetchActiveTrips(opts: {
           to_stop_id: opts.toStopId,
         };
       } catch {
-        // If RPC fails, leave segment_availability undefined
+        // RPC may not exist — ignore
       }
     }
 
     out.push(trip);
   }
 
-  // If segment filter provided, drop trips without availability
   if (opts.fromStopId && opts.toStopId) {
     return out.filter(
       (t) => (t.segment_availability?.seats_available ?? 0) > 0
@@ -270,7 +290,7 @@ serve(async (req: Request) => {
     if (pathname === "/health" || pathname === "/") {
       return ok({
         status: "B-ETA Passenger API active",
-        version: "1.0.0",
+        version: "1.1.0",
       });
     }
 
@@ -307,6 +327,8 @@ serve(async (req: Request) => {
           speed_kph: number | null;
           heading: number | null;
           last_position_at: string | null;
+          distance_remaining_km: number | null;
+          eta_minutes: number | null;
         }[]
       >`
         select
@@ -326,7 +348,27 @@ serve(async (req: Request) => {
           vcs.longitude as lng,
           vcs.speed_kph,
           vcs.heading,
-          vcs.last_position_at
+          vcs.last_position_at,
+          case
+            when t.route_id is not null
+                 and vcs.latitude is not null
+                 and vcs.longitude is not null then
+              public.remaining_distance_km(t.route_id, vcs.latitude, vcs.longitude)
+            else null
+          end as distance_remaining_km,
+          case
+            when t.route_id is not null
+                 and vcs.latitude is not null
+                 and vcs.longitude is not null
+                 and vcs.speed_kph is not null
+                 and vcs.speed_kph > 5 then
+              round(
+                (public.remaining_distance_km(t.route_id, vcs.latitude, vcs.longitude)
+                 / vcs.speed_kph * 60)::numeric,
+                0
+              )
+            else null
+          end as eta_minutes
         from trips t
         left join routes r on r.id = t.route_id
         left join vehicles v on v.id = t.vehicle_id
@@ -361,6 +403,12 @@ serve(async (req: Request) => {
           speed_kph: t.speed_kph,
           heading: t.heading,
           last_position_at: t.last_position_at,
+          distance_remaining_km:
+            t.distance_remaining_km != null
+              ? Number(t.distance_remaining_km)
+              : null,
+          eta_minutes:
+            t.eta_minutes != null ? Number(t.eta_minutes) : null,
         },
         vehicle: {
           registration_plate: t.vehicle_plate ?? "—",

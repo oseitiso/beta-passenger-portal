@@ -16,7 +16,6 @@ import type { PublicBus } from "@/lib/passengerApi";
 interface BusDetailDrawerProps {
   bus: PublicBus;
   onClose: () => void;
-  /** Called when the user clicks "Center on map". */
   onCenter?: (bus: PublicBus) => void;
 }
 
@@ -30,11 +29,24 @@ function timeSince(iso: string | null | undefined): string {
   return `${Math.floor(mins / 60)}h ago`;
 }
 
-function estimateEtaMinutes(bus: PublicBus): number | null {
-  const speed = bus.live?.speed_kph ?? 0;
-  if (speed < 5) return null;
-  const assumedRemainingKm = 60;
-  return Math.round((assumedRemainingKm / speed) * 60);
+function formatEtaHuman(etaMinutes: number | null | undefined): string | null {
+  if (etaMinutes == null || etaMinutes <= 0) return null;
+  if (etaMinutes < 60) return `${Math.round(etaMinutes)} min`;
+  const h = Math.floor(etaMinutes / 60);
+  const m = Math.round(etaMinutes % 60);
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
+}
+
+function formatArrivalClock(
+  etaMinutes: number | null | undefined
+): string | null {
+  if (etaMinutes == null || etaMinutes <= 0) return null;
+  const arrival = new Date(Date.now() + etaMinutes * 60_000);
+  return arrival.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
 }
 
 export function BusDetailDrawer({
@@ -42,7 +54,7 @@ export function BusDetailDrawer({
   onClose,
   onCenter,
 }: BusDetailDrawerProps) {
-  const [tick, setTick] = useState(0);
+  const [, setTick] = useState(0);
 
   // Update "Xs ago" every second
   useEffect(() => {
@@ -70,9 +82,12 @@ export function BusDetailDrawer({
   const tripCode = bus.trip_code ?? bus.trip_id.slice(0, 8);
   const status = bus.status ?? "active";
   const lastSeen = timeSince(bus.live?.last_position_at);
-  const eta = estimateEtaMinutes(bus);
 
-  // Occupancy percent for the bar
+  const remainingKm = bus.live?.distance_remaining_km ?? null;
+  const etaMin = bus.live?.eta_minutes ?? null;
+  const etaHuman = formatEtaHuman(etaMin);
+  const etaClock = formatArrivalClock(etaMin);
+
   const occupancyPct =
     capacity && capacity > 0
       ? Math.min(100, Math.round((passengers / capacity) * 100))
@@ -105,6 +120,31 @@ export function BusDetailDrawer({
         </button>
       </div>
 
+      {/* ETA hero block */}
+      {etaHuman && (
+        <div className="flex-shrink-0 border-b border-neutral-800 bg-gradient-to-br from-orange-600/10 to-orange-600/5 px-4 py-4">
+          <div className="flex items-center gap-1.5 text-xs font-medium text-orange-400">
+            <Clock className="h-3 w-3" />
+            ARRIVES IN
+          </div>
+          <div className="mt-1 flex items-baseline gap-2">
+            <span className="text-3xl font-bold text-orange-500">
+              {etaHuman}
+            </span>
+            {etaClock && (
+              <span className="text-sm font-medium text-orange-400/80">
+                · {etaClock}
+              </span>
+            )}
+          </div>
+          {remainingKm != null && (
+            <div className="mt-1 text-xs text-neutral-400">
+              {remainingKm.toFixed(1)} km remaining
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Route header */}
       <div className="flex-shrink-0 border-b border-neutral-800 px-4 py-4">
         <div className="flex items-center gap-2 text-xs font-medium text-neutral-500">
@@ -122,16 +162,16 @@ export function BusDetailDrawer({
       </div>
 
       {/* Stats grid */}
-      <div className="flex-shrink-0 grid grid-cols-2 gap-px bg-neutral-800">
+      <div className="grid flex-shrink-0 grid-cols-2 gap-px bg-neutral-800">
         <Stat
           icon={<Gauge className="h-4 w-4" />}
           label="Speed"
           value={`${speed} km/h`}
         />
         <Stat
-          icon={<Clock className="h-4 w-4" />}
-          label="ETA"
-          value={eta != null ? `~${eta} min` : "—"}
+          icon={<MapPin className="h-4 w-4" />}
+          label="Heading"
+          value={`${heading}°`}
         />
         <Stat
           icon={<Users className="h-4 w-4" />}
@@ -139,9 +179,9 @@ export function BusDetailDrawer({
           value={capacity ? `${passengers} / ${capacity}` : `${passengers}`}
         />
         <Stat
-          icon={<MapPin className="h-4 w-4" />}
-          label="Heading"
-          value={`${heading}°`}
+          icon={<Clock className="h-4 w-4" />}
+          label="ETA"
+          value={etaHuman ?? "—"}
         />
       </div>
 
@@ -185,7 +225,7 @@ export function BusDetailDrawer({
         </div>
       </div>
 
-      {/* Coordinates (subtle) */}
+      {/* Coordinates */}
       <div className="flex-shrink-0 px-4 py-4">
         <div className="mb-2 text-xs font-medium text-neutral-500">
           POSITION
@@ -201,6 +241,12 @@ export function BusDetailDrawer({
             <div className="mb-1 text-neutral-600">LNG</div>
             <div className="font-mono text-neutral-300">
               {bus.live?.longitude?.toFixed(5) ?? "—"}
+            </div>
+          </div>
+          <div className="col-span-2">
+            <div className="mb-1 text-neutral-600">REMAINING</div>
+            <div className="font-mono text-neutral-300">
+              {remainingKm != null ? `${remainingKm.toFixed(1)} km` : "—"}
             </div>
           </div>
         </div>

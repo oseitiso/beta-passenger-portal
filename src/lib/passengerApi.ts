@@ -31,6 +31,8 @@ export interface PublicBus {
     speed_kph: number | null;
     heading: number | null;
     last_position_at: string | null;
+    distance_remaining_km: number | null;
+    eta_minutes: number | null;
   };
   vehicle: {
     registration_plate: string;
