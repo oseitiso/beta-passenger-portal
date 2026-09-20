@@ -177,11 +177,45 @@ export default function MapPage() {
 
   const matchingBusIds = useMemo(() => {
     const set = new Set<string>();
+    const originLower = origin.trim().toLowerCase();
+    const destinationLower = destination.trim().toLowerCase();
+
+    const findStopOrder = (needle: string): number | null => {
+      if (!needle) return null;
+      for (const b of buses) {
+        const stops = b.route?.stops ?? [];
+        for (const s of stops) {
+          if (typeof s.order !== "number") continue;
+          const haystack = String(s.name || "") + " " + String(s.city || "");
+          if (haystack.toLowerCase().includes(needle)) return s.order;
+        }
+      }
+      return null;
+    };
+
     for (const b of buses) {
-      const matchOrigin = !origin || b.route?.origin === origin;
-      const matchDestination =
-        !destination || b.route?.destination === destination;
-      if (matchOrigin && matchDestination) set.add(b.trip_id);
+      const routeStops = b.route?.stops ?? [];
+
+      const findOrderInBus = (needle: string): number | null => {
+        if (!needle) return null;
+        for (const s of routeStops) {
+          if (typeof s.order !== "number") continue;
+          const haystack = (String(s.name || "") + " " + String(s.city || "")).toLowerCase();
+          if (haystack.includes(needle)) return s.order;
+        }
+        return null;
+      };
+
+      const fromOrder = findOrderInBus(originLower);
+      const toOrder = findOrderInBus(destinationLower);
+
+      let ok = true;
+      if (originLower && fromOrder === null) ok = false;
+      if (ok && destinationLower && toOrder === null) ok = false;
+      if (ok && originLower && destinationLower && fromOrder !== null && toOrder !== null) {
+        if (fromOrder >= toOrder) ok = false;
+      }
+      if (ok) set.add(b.trip_id);
     }
     return set;
   }, [buses, origin, destination]);
