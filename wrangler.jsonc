@@ -1,27 +1,28 @@
 {
-	"$schema": "node_modules/wrangler/config-schema.json",
-	"main": ".open-next/worker.js",
-	"name": "beta-passenger-portal",
-	"compatibility_date": "2026-09-19",
-	"compatibility_flags": [
-		"nodejs_compat",
-		"global_fetch_strictly_public"
-	],
-	"assets": {
-		"directory": ".open-next/assets",
-		"binding": "ASSETS"
-	},
-	"services": [
-		{
-			// Self-reference service binding, the service name must match the worker name
-			// see https://opennext.js.org/cloudflare/caching
-			"binding": "WORKER_SELF_REFERENCE",
-			"service": "beta-passenger-portal"
-		}
-	],
-	"images": {
-		// Enable image optimization
-		// see https://opennext.js.org/cloudflare/howtos/image
-		"binding": "IMAGES"
-	}
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "main": ".open-next/worker.js",
+  "name": "beta-passenger-portal",
+  "vars": {
+    "NEXT_PUBLIC_SUPABASE_URL": "https://hzmpncdygkeqvoszunfm.supabase.co",
+    "NEXT_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh6bXBuY2R5Z2tlcXZvc3p1bmZtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk1Nzg3NzAsImV4cCI6MjEwNTE1NDc3MH0.XAFIVcB5iZjHg6uczZRdjvYAKZbq5sMWb0l-eVCrBjs",
+    "NEXT_PUBLIC_PASSENGER_API_URL": "https://hzmpncdygkeqvoszunfm.supabase.co/functions/v1/passenger-api"
+  },
+  "compatibility_date": "2026-09-19",
+  "compatibility_flags": [
+    "nodejs_compat",
+    "global_fetch_strictly_public"
+  ],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "services": [
+    {
+      "binding": "WORKER_SELF_REFERENCE",
+      "service": "beta-passenger-portal"
+    }
+  ],
+  "images": {
+    "binding": "IMAGES"
+  }
 }

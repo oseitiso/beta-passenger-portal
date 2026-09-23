@@ -1,20 +1,16 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import dynamic from "next/dynamic";
-import { Bus, RefreshCw, List, X, Route as RouteIcon, Ticket } from "lucide-react";
-import { getActiveBuses, type PublicBus } from "@/lib/passengerApi";
+import { Bus, RefreshCw, Ticket, LocateFixed, Search, X } from "lucide-react";
 import {
-  getRoutesWithPolylines,
-  getStops,
-  type PublicRouteShape,
-  type PublicStopShape,
-} from "@/lib/routesApi";
+  getActiveBuses,
+  type PublicBus,
+} from "@/lib/passengerApi";
 import { subscribeToVehicleState } from "@/lib/realtime";
+import { BOTSWANA_LOCATIONS, type BotswanaLocation } from "@/lib/botswanaLocations";
 import { BusDetailDrawer } from "@/components/map/BusDetailDrawer";
 import { BusList } from "@/components/map/BusList";
-import { LocationCombobox } from "@/components/map/LocationCombobox";
 import { FilterControls, type FilterMode } from "@/components/map/FilterControls";
 import { BookingModal } from "@/components/booking/BookingModal";
 import {
@@ -33,7 +29,7 @@ const PassengerMap = dynamic(
   {
     ssr: false,
     loading: () => (
-      <div className="flex h-full w-full items-center justify-center bg-neutral-900">
+      <div className="flex h-full w-full items-center justify-center rounded-lg bg-neutral-900">
         <div className="text-center text-neutral-400">
           <Bus className="mx-auto mb-2 h-8 w-8 animate-pulse" />
           <p className="text-sm">Loading map…</p>
@@ -43,35 +39,229 @@ const PassengerMap = dynamic(
   }
 );
 
+const SORTED_LOCATIONS: BotswanaLocation[] = [...BOTSWANA_LOCATIONS].sort((a, b) =>
+  a.name.localeCompare(b.name)
+);
+
+// Normalize a location string for matching ("Gaborone Bus Rank" vs "Gaborone")
+function normalizeLocation(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/\s+bus\s+(rank|stop|station|terminus)$/i, "")
+    .replace(/\s+(rank|station|terminus|stop)$/i, "")
+    .trim();
+}
+
+function locationMatches(stopName: string, userPick: string): boolean {
+  const a = normalizeLocation(stopName);
+  const b = normalizeLocation(userPick);
+  if (!a || !b) return false;
+  return a === b || a.includes(b) || b.includes(a);
+}
+
+function findNearestLocation(lat: number, lng: number): BotswanaLocation | null {
+  if (!SORTED_LOCATIONS.length) return null;
+  let best: BotswanaLocation | null = null;
+  let bestDist = Infinity;
+  for (const loc of SORTED_LOCATIONS) {
+    const dLat = loc.lat - lat;
+    const dLng = loc.lng - lng;
+    const d = dLat * dLat + dLng * dLng;
+    if (d < bestDist) {
+      bestDist = d;
+      best = loc;
+    }
+  }
+  return best;
+}
+
+interface LocationSelectProps {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  showLocateButton?: boolean;
+  locations: BotswanaLocation[];
+}
+
+function LocationSelect({
+  label,
+  value,
+  onChange,
+  placeholder = "Any location",
+  showLocateButton = false,
+  locations,
+}: LocationSelectProps) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [locating, setLocating] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    function onClick(e: MouseEvent) {
+      if (!wrapperRef.current) return;
+      if (!wrapperRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        setQuery("");
+      }
+    }
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, []);
+
+  const filtered = useMemo(() => {
+    if (!query.trim()) return locations;
+    const q = query.trim().toLowerCase();
+    return locations.filter((l) => l.name.toLowerCase().includes(q));
+  }, [locations, query]);
+
+  const handleLocate = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!navigator.geolocation) {
+      alert("Geolocation is not supported by your browser.");
+      return;
+    }
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const nearest = findNearestLocation(pos.coords.latitude, pos.coords.longitude);
+        setLocating(false);
+        if (nearest) {
+          onChange(nearest.name);
+          setOpen(false);
+        } else {
+          alert("Could not find a nearby location.");
+        }
+      },
+      (err) => {
+        setLocating(false);
+        alert(`Location error: ${err.message}`);
+      },
+      { enableHighAccuracy: false, timeout: 8000, maximumAge: 60000 }
+    );
+  };
+
+  return (
+    <div ref={wrapperRef} className="relative">
+      <div className="mb-1 flex items-center justify-between">
+        <label className="text-xs font-medium text-neutral-400">{label}</label>
+        {showLocateButton && (
+          <button
+            type="button"
+            onClick={handleLocate}
+            disabled={locating}
+            className="flex items-center gap-1 rounded text-[10px] font-medium text-orange-400 transition-colors hover:text-orange-300 disabled:opacity-50"
+            title="Use my current location"
+          >
+            {locating ? (
+              <RefreshCw className="h-3 w-3 animate-spin" />
+            ) : (
+              <LocateFixed className="h-3 w-3" />
+            )}
+            My location
+          </button>
+        )}
+      </div>
+
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center justify-between rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-left text-sm text-neutral-100 transition-colors hover:border-neutral-600"
+      >
+        <span className={value ? "text-neutral-100" : "text-neutral-500"}>
+          {value || placeholder}
+        </span>
+        <Search className="h-3.5 w-3.5 text-neutral-500" />
+      </button>
+
+      {open && (
+        <div className="absolute left-0 right-0 z-[1100] mt-1 max-h-64 overflow-hidden rounded-lg border border-neutral-700 bg-neutral-950 shadow-2xl">
+          <div className="border-b border-neutral-800 p-2">
+            <div className="flex items-center gap-2 rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1.5">
+              <Search className="h-3.5 w-3.5 text-neutral-500" />
+              <input
+                autoFocus
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search locations…"
+                className="flex-1 bg-transparent text-sm text-neutral-100 placeholder:text-neutral-600 focus:outline-none"
+              />
+              {query && (
+                <button
+                  onClick={() => setQuery("")}
+                  className="text-neutral-500 hover:text-neutral-300"
+                  aria-label="Clear"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="max-h-48 overflow-y-auto py-1">
+            <button
+              onClick={() => {
+                onChange("");
+                setOpen(false);
+                setQuery("");
+              }}
+              className={`block w-full px-3 py-1.5 text-left text-sm transition-colors hover:bg-neutral-900 ${
+                !value ? "text-orange-400" : "text-neutral-400"
+              }`}
+            >
+              {placeholder}
+            </button>
+
+            {filtered.length === 0 && (
+              <div className="px-3 py-2 text-xs text-neutral-500">
+                No locations match "{query}"
+              </div>
+            )}
+
+            {filtered.map((loc) => (
+              <button
+                key={loc.name}
+                onClick={() => {
+                  onChange(loc.name);
+                  setOpen(false);
+                  setQuery("");
+                }}
+                className={`block w-full px-3 py-1.5 text-left text-sm transition-colors hover:bg-neutral-900 ${
+                  value === loc.name ? "text-orange-400" : "text-neutral-200"
+                }`}
+              >
+                {loc.name}
+                <span className="ml-2 text-xs text-neutral-500">
+                  {loc.region}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function MapPage() {
-  const router = useRouter();
   const [buses, setBuses] = useState<PublicBus[]>([]);
-  const [routes, setRoutes] = useState<PublicRouteShape[]>([]);
-  const [stops, setStops] = useState<PublicStopShape[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedBus, setSelectedBus] = useState<PublicBus | null>(null);
-  const [focusBus, setFocusBus] = useState<PublicBus | null>(null);
   const [origin, setOrigin] = useState("");
   const [destination, setDestination] = useState("");
-  const [filterMode, setFilterMode] = useState<FilterMode>("hide");
-  const [showRoutes, setShowRoutes] = useState(true);
-  const [showStops, setShowStops] = useState(true);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
   const [mounted, setMounted] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [bookingBus, setBookingBus] = useState<PublicBus | null>(null);
+  const [routeStops, setRouteStops] = useState<{ id: string; name: string }[]>([]);
   const [activeBooking, setActiveBooking] = useState<BookingDetail | null>(null);
+  const [filterMode, setFilterMode] = useState<FilterMode>("dim");
+  const [filterHovered, setFilterHovered] = useState(false);
   const [, setTick] = useState(0);
 
   useEffect(() => {
     setMounted(true);
-    setLastUpdated(new Date());
-  }, []);
-
-  useEffect(() => {
-    const t = setInterval(() => setTick((v) => v + 1), 1000);
-    return () => clearInterval(t);
   }, []);
 
   const fetchBuses = useCallback(async () => {
@@ -81,9 +271,8 @@ export default function MapPage() {
       const data = await getActiveBuses();
       setBuses(data);
       setLastUpdated(new Date());
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Failed to load buses";
-      setError(msg);
+    } catch (e: any) {
+      setError(e?.message ?? "Failed to load buses");
     } finally {
       setLoading(false);
     }
@@ -121,29 +310,6 @@ export default function MapPage() {
 
   useEffect(() => {
     if (!mounted) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const [routesData, stopsData] = await Promise.all([
-          getRoutesWithPolylines(),
-          getStops(),
-        ]);
-        if (!cancelled) {
-          setRoutes(routesData);
-          setStops(stopsData);
-        }
-      } catch (e) {
-        console.error("[map] Failed to load routes/stops", e);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [mounted]);
-
-  useEffect(() => {
-    if (!mounted) return;
-
     fetchBuses();
     refreshActiveBooking();
 
@@ -155,9 +321,6 @@ export default function MapPage() {
       (status) => {
         if (status === "SUBSCRIBED") {
           console.log("[realtime] Subscribed to vehicle_current_state");
-        }
-        if (status === "CHANNEL_ERROR") {
-          console.error("[realtime] Channel error");
         }
       }
     );
@@ -174,98 +337,68 @@ export default function MapPage() {
   }, [mounted, fetchBuses, refreshActiveBooking]);
 
   const filterActive = Boolean(origin || destination);
-
-  const matchingBusIds = useMemo(() => {
-    const set = new Set<string>();
-    const originLower = origin.trim().toLowerCase();
-    const destinationLower = destination.trim().toLowerCase();
-
-    const findStopOrder = (needle: string): number | null => {
-      if (!needle) return null;
-      for (const b of buses) {
-        const stops = b.route?.stops ?? [];
-        for (const s of stops) {
-          if (typeof s.order !== "number") continue;
-          const haystack = String(s.name || "") + " " + String(s.city || "");
-          if (haystack.toLowerCase().includes(needle)) return s.order;
-        }
-      }
-      return null;
-    };
-
-    for (const b of buses) {
-      const routeStops = b.route?.stops ?? [];
-
-      const findOrderInBus = (needle: string): number | null => {
-        if (!needle) return null;
-        for (const s of routeStops) {
-          if (typeof s.order !== "number") continue;
-          const haystack = (String(s.name || "") + " " + String(s.city || "")).toLowerCase();
-          if (haystack.includes(needle)) return s.order;
-        }
-        return null;
-      };
-
-      const fromOrder = findOrderInBus(originLower);
-      const toOrder = findOrderInBus(destinationLower);
-
-      let ok = true;
-      if (originLower && fromOrder === null) ok = false;
-      if (ok && destinationLower && toOrder === null) ok = false;
-      if (ok && originLower && destinationLower && fromOrder !== null && toOrder !== null) {
-        if (fromOrder >= toOrder) ok = false;
-      }
-      if (ok) set.add(b.trip_id);
-    }
-    return set;
-  }, [buses, origin, destination]);
-
-  const visibleBuses = useMemo(() => {
-    if (!filterActive) return buses;
-    if (filterMode === "dim") return buses;
-    return buses.filter((b) => matchingBusIds.has(b.trip_id));
-  }, [buses, filterActive, filterMode, matchingBusIds]);
-
-  const sidebarBuses = useMemo(() => {
-    if (!filterActive) return buses;
-    return buses.filter((b) => matchingBusIds.has(b.trip_id));
-  }, [buses, filterActive, matchingBusIds]);
-
-  const clearFilters = () => {
-    setOrigin("");
-    setDestination("");
-  };
+  const filterIdle = !filterActive && !filterHovered;
 
   const handleSelectBus = (bus: PublicBus) => {
     setSelectedBus(bus);
-    setFocusBus(bus);
-    setSidebarOpen(false);
   };
 
   const handleCloseDetail = () => {
     setSelectedBus(null);
-    setFocusBus(null);
-    setSidebarOpen(true);
   };
 
   const handleCenter = (bus: PublicBus) => {
-    setFocusBus({ ...bus });
+    setSelectedBus({ ...bus });
   };
 
-  const handleOpenBooking = (bus: PublicBus) => {
+  const handleOpenBooking = async (bus: PublicBus) => {
     if (activeBooking) {
       alert(
         `You already have an active booking (${activeBooking.booking_reference}). Cancel it first or wait for it to expire.`
       );
       return;
     }
+
+    if (!bus.route?.route_id) {
+      alert("This bus does not have a route assigned. Cannot book.");
+      return;
+    }
+
+    // The passenger-api Edge Function already returns the complete, ordered
+    // stop list for this route via `bus.route.stops` — including the real
+    // stop names. It does this through a service-role Postgres connection
+    // that bypasses RLS. If we tried to re-fetch stop names from the browser,
+    // RLS on the `stops` table would filter out every operator-created stop
+    // (they are created with is_public = false) and we'd be left rendering
+    // "Unknown stop". So we use what the Edge Function already sent us.
+    const stops = bus.route.stops ?? [];
+
+    if (stops.length < 2) {
+      alert(
+        `Cannot book this bus.\n\n` +
+          `Route: ${bus.route.name ?? "(unnamed)"}\n` +
+          `Route ID: ${bus.route.route_id}\n` +
+          `Route stops found: ${stops.length}`
+      );
+      return;
+    }
+
+    const formattedStops = stops
+      .slice()
+      .sort((a, b) => a.order - b.order)
+      .map((s) => ({
+        id: s.stop_id,
+        name: s.name,
+      }));
+
+    setRouteStops(formattedStops);
     setBookingBus(bus);
   };
 
   const handleBookingSuccess = async () => {
     await refreshActiveBooking();
     setTimeout(() => {
-      router.push("/my-booking");
+      window.location.href = "/my-booking";
     }, 1500);
   };
 
@@ -280,128 +413,85 @@ export default function MapPage() {
 
   const secondsAgo = lastUpdated
     ? Math.floor((Date.now() - lastUpdated.getTime()) / 1000)
-    : 0;
-  const agoLabel =
-    secondsAgo < 5
-      ? "just now"
-      : secondsAgo < 60
-      ? `${secondsAgo}s ago`
-      : `${Math.floor(secondsAgo / 60)}m ago`;
+    : null;
 
-  const layoutKey = `${sidebarOpen ? "S" : "H"}-${selectedBus ? "D" : "N"}`;
-  const selectedBusId = selectedBus?.trip_id ?? null;
+  // ── FILTER: match against route.stops (terminals + intermediate), with direction ──
+  const sidebarBuses = useMemo(() => {
+    if (!origin && !destination) return buses;
+
+    return buses.filter((b) => {
+      const stops = b.route?.stops ?? [];
+
+      // Fallback: if the API didn't send stops, use the old terminal-only check
+      if (stops.length === 0) {
+        if (origin && b.route?.origin !== origin) return false;
+        if (destination && b.route?.destination !== destination) return false;
+        return true;
+      }
+
+      const findIndex = (pick: string): number => {
+        // Fast path — exact match against route terminals
+        if (b.route?.origin === pick) return 0;
+        if (b.route?.destination === pick) return stops.length - 1;
+        // Otherwise fuzzy-match against every stop name
+        return stops.findIndex((s) => locationMatches(s.name, pick));
+      };
+
+      const fromIdx = origin ? findIndex(origin) : -1;
+      const toIdx = destination ? findIndex(destination) : -1;
+
+      if (origin && fromIdx === -1) return false;
+      if (destination && toIdx === -1) return false;
+
+      // Direction check: FROM must come before TO
+      if (fromIdx !== -1 && toIdx !== -1 && fromIdx >= toIdx) return false;
+
+      return true;
+    });
+  }, [buses, origin, destination]);
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden bg-neutral-950">
-      <header className="flex-shrink-0 border-b border-neutral-800 bg-neutral-900/50 backdrop-blur">
-        <div className="flex items-center justify-between px-4 py-2.5">
-          <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-orange-600 text-sm font-bold text-white">
-              B
-            </div>
-            <div>
-              <div className="text-[10px] uppercase tracking-wider text-neutral-400">
-                B-ETA
-              </div>
-              <div className="text-sm font-semibold leading-tight">
-                Live Buses
-              </div>
-            </div>
+    <div className="flex h-screen flex-col bg-neutral-950 text-neutral-100">
+      <header className="flex items-center justify-between border-b border-neutral-800 bg-neutral-950 px-4 py-3">
+        <div className="flex items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-600 font-bold text-white">
+            B
           </div>
+          <div>
+            <div className="text-xs text-neutral-400">B-ETA</div>
+            <div className="font-semibold">Live Buses</div>
+          </div>
+        </div>
 
-          <div className="flex items-center gap-3 text-sm">
-            <a
-              href="/my-booking"
-              className="hidden items-center gap-1.5 rounded-lg border border-neutral-700 px-3 py-1.5 text-xs text-neutral-300 hover:bg-neutral-800 sm:flex"
-            >
-              <Ticket className="h-3.5 w-3.5" />
-              My Booking
-            </a>
-            <span className="hidden items-center gap-1.5 sm:flex">
-              <span className="h-2 w-2 animate-pulse rounded-full bg-green-500" />
-              <span className="text-xs text-neutral-400">Live</span>
-            </span>
-            <span className="text-xs text-neutral-500">
-              {mounted && lastUpdated ? `Updated ${agoLabel}` : "—"}
-            </span>
-            <button
-              onClick={fetchBuses}
-              disabled={loading}
-              className="rounded-lg border border-neutral-700 p-1.5 hover:bg-neutral-800 disabled:opacity-50"
-              aria-label="Refresh"
-            >
-              <RefreshCw
-                className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`}
-              />
-            </button>
-          </div>
+        <div className="flex items-center gap-3 text-sm">
+          <a
+            href="/my-booking"
+            className="hidden items-center gap-1.5 rounded-lg border border-neutral-700 px-3 py-1.5 text-xs text-neutral-300 hover:bg-neutral-800 sm:flex"
+          >
+            <Ticket className="h-3.5 w-3.5" />
+            My Booking
+          </a>
+          <span className="hidden items-center gap-1.5 sm:flex">
+            <span className="h-2 w-2 animate-pulse rounded-full bg-green-500" />
+            <span className="text-xs text-neutral-400">Live</span>
+          </span>
+          <button
+            onClick={fetchBuses}
+            disabled={loading}
+            className="rounded-lg border border-neutral-700 p-2 hover:bg-neutral-800 disabled:opacity-50"
+            aria-label="Refresh"
+          >
+            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+          </button>
         </div>
       </header>
 
-      <div className="flex-shrink-0 border-b border-neutral-800 bg-neutral-950 px-4 py-3">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <LocationCombobox
-            label="FROM"
-            placeholder="Where are you?"
-            value={origin}
-            onChange={setOrigin}
-            enableGeolocation
-          />
-          <LocationCombobox
-            label="TO"
-            placeholder="Where to?"
-            value={destination}
-            onChange={setDestination}
-          />
-        </div>
-      </div>
-
-      <div className="flex-shrink-0 border-b border-neutral-800 bg-neutral-950 px-4 py-2">
-        <div className="flex flex-wrap items-center gap-3">
-          <FilterControls
-            visibleCount={matchingBusIds.size}
-            totalCount={buses.length}
-            filterActive={filterActive}
-            mode={filterMode}
-            onModeChange={setFilterMode}
-            onClear={clearFilters}
-          />
-
-          <div className="ml-auto flex items-center gap-2 text-xs">
-            <button
-              onClick={() => setShowRoutes((v) => !v)}
-              className={`flex items-center gap-1.5 rounded-md border px-2 py-1 transition-colors ${
-                showRoutes
-                  ? "border-orange-600/50 bg-orange-600/10 text-orange-400"
-                  : "border-neutral-700 text-neutral-500 hover:bg-neutral-800"
-              }`}
-              title="Toggle route lines"
-            >
-              <RouteIcon className="h-3 w-3" />
-              Routes
-            </button>
-            <button
-              onClick={() => setShowStops((v) => !v)}
-              className={`flex items-center gap-1.5 rounded-md border px-2 py-1 transition-colors ${
-                showStops
-                  ? "border-orange-600/50 bg-orange-600/10 text-orange-400"
-                  : "border-neutral-700 text-neutral-500 hover:bg-neutral-800"
-              }`}
-              title="Toggle stop markers"
-            >
-              <span className="h-2 w-2 rounded-full bg-current" />
-              Stops
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <div className="flex min-h-0 flex-1">
-        {sidebarOpen && selectedBus === null && (
+      <div className="flex flex-1 overflow-hidden">
+        {!selectedBus && (
           <aside className="hidden w-80 flex-shrink-0 overflow-hidden border-r border-neutral-800 bg-neutral-950 lg:block">
             <BusList
               buses={sidebarBuses}
-              selectedBusId={selectedBusId}
+              selectedBusId={null}
               activeBooking={activeBooking}
               onSelectBus={handleSelectBus}
               onCancelBooking={handleCancelActiveBooking}
@@ -410,111 +500,106 @@ export default function MapPage() {
           </aside>
         )}
 
-        <div className="relative min-h-0 min-w-0 flex-1">
-          {error ? (
-            <div className="flex h-full items-center justify-center text-red-400">
-              <p>Error: {error}</p>
-            </div>
-          ) : (
-            <PassengerMap
-              buses={visibleBuses}
-              routes={routes}
-              stops={stops}
-              matchingBusIds={matchingBusIds}
-              selectedBusId={selectedBusId}
-              onSelectBus={handleSelectBus}
-              focusBus={focusBus}
-              layoutKey={layoutKey}
-              dimNonMatching={filterMode === "dim"}
-              showRoutes={showRoutes}
-              showStops={showStops}
-            />
-          )}
+        <main className="relative flex-1 overflow-hidden">
+          <PassengerMap
+            buses={sidebarBuses}
+            selectedBusId={selectedBus?.trip_id ?? null}
+            onSelectBus={handleSelectBus}
+          />
 
-          {selectedBus === null && (
-            <button
-              onClick={() => setSidebarOpen((v) => !v)}
-              className="absolute left-3 top-3 z-20 flex items-center gap-1.5 rounded-lg border border-neutral-700 bg-neutral-900/95 px-3 py-2 text-xs font-medium text-neutral-200 backdrop-blur lg:hidden"
+          <div
+            className="pointer-events-none absolute left-4 top-4 z-[1000] w-72 max-w-[calc(100%-2rem)] space-y-2"
+            onMouseEnter={() => setFilterHovered(true)}
+            onMouseLeave={() => setFilterHovered(false)}
+          >
+            <div
+              className={`pointer-events-auto rounded-lg border border-neutral-800 bg-neutral-900/95 p-3 shadow-lg backdrop-blur transition-opacity duration-300 ${
+                filterIdle ? "opacity-60" : "opacity-100"
+              }`}
             >
-              {sidebarOpen ? (
-                <>
-                  <X className="h-3.5 w-3.5" /> Hide list
-                </>
-              ) : (
-                <>
-                  <List className="h-3.5 w-3.5" /> Show list
-                </>
-              )}
-            </button>
-          )}
-
-          {sidebarOpen && selectedBus === null && (
-            <div className="absolute inset-x-0 bottom-0 z-10 max-h-[45%] overflow-hidden rounded-t-2xl border-t border-neutral-800 bg-neutral-950/98 backdrop-blur lg:hidden">
-              <BusList
-                buses={sidebarBuses}
-                selectedBusId={selectedBusId}
-                activeBooking={activeBooking}
-                onSelectBus={handleSelectBus}
-                onCancelBooking={handleCancelActiveBooking}
-                loading={loading}
+              <LocationSelect
+                label="FROM"
+                value={origin}
+                onChange={setOrigin}
+                placeholder="Any origin"
+                showLocateButton
+                locations={SORTED_LOCATIONS}
               />
-            </div>
-          )}
 
-          {!loading && !error && visibleBuses.length === 0 && (
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-              <div className="pointer-events-auto rounded-xl border border-neutral-800 bg-neutral-900/95 px-6 py-4 text-center shadow-xl">
-                <Bus className="mx-auto mb-2 h-8 w-8 text-neutral-500" />
-                <p className="font-semibold">
-                  {filterActive ? "No matching buses" : "No buses on the road"}
-                </p>
-                <p className="mt-1 max-w-xs text-xs text-neutral-400">
-                  {filterActive
-                    ? "Try clearing filters or choosing a different route."
-                    : "There are no active trips right now."}
-                </p>
+              <div className="mt-2">
+                <LocationSelect
+                  label="TO"
+                  value={destination}
+                  onChange={setDestination}
+                  placeholder="Any destination"
+                  locations={SORTED_LOCATIONS}
+                />
               </div>
             </div>
-          )}
-        </div>
 
-        {selectedBus !== null && (
-          <div className="hidden w-[380px] flex-shrink-0 lg:block">
+            <div
+              className={`pointer-events-auto transition-opacity duration-300 ${
+                filterIdle ? "opacity-60" : "opacity-100"
+              }`}
+            >
+              <FilterControls
+                visibleCount={sidebarBuses.length}
+                totalCount={buses.length}
+                filterActive={filterActive}
+                mode={filterMode}
+                onModeChange={setFilterMode}
+                onClear={() => {
+                  setOrigin("");
+                  setDestination("");
+                }}
+              />
+            </div>
+          </div>
+
+          {secondsAgo !== null && (
+            <div className="pointer-events-none absolute bottom-4 left-4 z-[1000] rounded-full bg-neutral-900/90 px-3 py-1.5 text-xs text-neutral-400 backdrop-blur">
+              Updated {secondsAgo}s ago
+            </div>
+          )}
+
+          {error && (
+            <div className="pointer-events-none absolute bottom-4 right-4 z-[1000] rounded-lg border border-red-900/50 bg-red-950/80 px-3 py-2 text-xs text-red-300 backdrop-blur">
+              {error}
+            </div>
+          )}
+        </main>
+
+        {selectedBus && (
+          <aside className="hidden w-96 flex-shrink-0 overflow-hidden border-l border-neutral-800 bg-neutral-950 lg:block">
             <BusDetailDrawer
               bus={selectedBus}
               onClose={handleCloseDetail}
               onCenter={handleCenter}
               onBookSeat={handleOpenBooking}
             />
-          </div>
+          </aside>
         )}
       </div>
 
-      {selectedBus !== null && (
-        <div className="fixed inset-0 lg:hidden" style={{ zIndex: 9000 }}>
-          <div
-            className="absolute inset-0 bg-black/60"
-            onClick={handleCloseDetail}
+      {selectedBus && (
+        <div className="absolute inset-x-0 bottom-0 z-[1100] lg:hidden">
+          <BusDetailDrawer
+            bus={selectedBus}
+            onClose={handleCloseDetail}
+            onCenter={handleCenter}
+            onBookSeat={handleOpenBooking}
           />
-          <div className="absolute inset-y-0 right-0 w-full max-w-sm bg-neutral-950">
-            <BusDetailDrawer
-              bus={selectedBus}
-              onClose={handleCloseDetail}
-              onCenter={handleCenter}
-              onBookSeat={handleOpenBooking}
-            />
-          </div>
         </div>
       )}
 
-      {bookingBus && (
+      {bookingBus && routeStops.length >= 2 && (
         <BookingModal
           bus={bookingBus}
-          fromStopId="33333333-0000-0000-0001-000000000004"
-          fromStopName={bookingBus.route?.origin ?? "Your stop"}
-          toStopId="33333333-0000-0000-0001-000000000005"
-          toStopName={bookingBus.route?.destination ?? "Your destination"}
-          onClose={() => setBookingBus(null)}
+          routeStops={routeStops}
+          onClose={() => {
+            setBookingBus(null);
+            setRouteStops([]);
+          }}
           onSuccess={handleBookingSuccess}
         />
       )}

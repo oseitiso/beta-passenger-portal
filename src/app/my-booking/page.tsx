@@ -196,14 +196,45 @@ export default function MyBookingPage() {
               </div>
             </div>
 
+            {/* Journey (boarding → alighting) */}
+            <div className="rounded-xl border border-orange-900/40 bg-orange-950/20 p-4">
+              <div className="mb-3 flex items-center gap-1.5 text-xs font-medium text-orange-400">
+                <MapPin className="h-3.5 w-3.5" />
+                Your journey
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="flex-1">
+                  <div className="text-[10px] uppercase tracking-wider text-neutral-500">
+                    Boarding
+                  </div>
+                  <div className="mt-0.5 text-sm font-semibold text-neutral-100">
+                    {booking.from_stop_name ??
+                      booking.route_origin ??
+                      "—"}
+                  </div>
+                </div>
+                <div className="text-neutral-600">→</div>
+                <div className="flex-1">
+                  <div className="text-[10px] uppercase tracking-wider text-neutral-500">
+                    Alighting
+                  </div>
+                  <div className="mt-0.5 text-sm font-semibold text-neutral-100">
+                    {booking.to_stop_name ??
+                      booking.route_destination ??
+                      "—"}
+                  </div>
+                </div>
+              </div>
+              {booking.route_name && (
+                <div className="mt-3 border-t border-orange-900/30 pt-3 text-xs text-neutral-500">
+                  Route: <span className="text-neutral-300">{booking.route_name}</span>
+                </div>
+              )}
+            </div>
+
             {/* Details */}
             <div className="rounded-xl border border-neutral-800 bg-neutral-900/30 p-4">
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <DetailRow
-                  icon={<MapPin className="h-3.5 w-3.5" />}
-                  label="Route"
-                  value={booking.route_name ?? "—"}
-                />
                 <DetailRow
                   icon={<User className="h-3.5 w-3.5" />}
                   label="Passenger"
@@ -218,6 +249,11 @@ export default function MyBookingPage() {
                   icon={<Clock className="h-3.5 w-3.5" />}
                   label="Seats"
                   value={`${booking.requested_seats}`}
+                />
+                <DetailRow
+                  icon={<MapPin className="h-3.5 w-3.5" />}
+                  label="Trip"
+                  value={booking.trip_code ?? "—"}
                 />
               </div>
             </div>
@@ -265,7 +301,7 @@ export default function MyBookingPage() {
   );
 }
 
-// ─── Subcomponents ─────────────────────────────────────────────────────────
+// ─── Subcomponents ──────────────────────────────────────────────────────
 
 function StatusBanner({
   booking,
@@ -282,6 +318,11 @@ function StatusBanner({
   const remainingSec = Math.max(0, Math.floor((expiresAt - now) / 1000));
   const remainingMin = Math.floor(remainingSec / 60);
   const remainingClock = `${remainingMin}:${String(remainingSec % 60).padStart(2, "0")}`;
+
+  const boardingName =
+    booking.from_stop_name ?? booking.route_origin ?? "your stop";
+  const alightingName =
+    booking.to_stop_name ?? booking.route_destination ?? "your destination";
 
   if (status === "PENDING") {
     return (
@@ -313,7 +354,7 @@ function StatusBanner({
             Driver confirmed your seat
           </div>
           <div className="mt-1 text-xs text-green-300/70">
-            Head to <span className="font-medium">{booking.route_origin ?? "your stop"}</span>.
+            Head to <span className="font-medium">{boardingName}</span>.
             Show the PIN below to the driver when the bus arrives.
           </div>
         </div>
@@ -330,7 +371,7 @@ function StatusBanner({
             You are on the bus
           </div>
           <div className="mt-1 text-xs text-green-300/70">
-            Enjoy your trip to {booking.route_destination ?? "your destination"}.
+            Enjoy your trip to <span className="font-medium">{alightingName}</span>.
             Pay the driver in cash if you haven't already.
           </div>
         </div>

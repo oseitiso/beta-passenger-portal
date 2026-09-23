@@ -207,7 +207,7 @@ async function fetchActiveTrips(opts: {
     left join routes r on r.id = t.route_id
     left join vehicles v on v.id = t.vehicle_id
     left join vehicle_current_state vcs on vcs.vehicle_id = t.vehicle_id
-    where t.status = 'IN_PROGRESS'
+    where t.status = 'IN_PROGRESS' AND vcs.latitude is not null AND vcs.longitude is not null AND vcs.last_position_at is not null AND vcs.last_position_at > now() - interval '2 minutes'
     order by t.scheduled_departure desc
   `;
 

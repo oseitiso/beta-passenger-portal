@@ -11,23 +11,16 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import postgres from "https://esm.sh/postgres@3.4.4";
 
+const sql = postgres(Deno.env.get("SUPABASE_DB_URL")!, {
+  prepare: false,
+});
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
 };
-
-const SUPABASE_DB_URL = Deno.env.get("SUPABASE_DB_URL") ?? "";
-
-const sql = postgres(SUPABASE_DB_URL, {
-  prepare: false,
-  max: 5,
-  idle_timeout: 20,
-  connect_timeout: 15,
-});
-
-// ─── Helpers ────────────────────────────────────────────────────────────────
 
 function ok(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -36,14 +29,17 @@ function ok(body: unknown, status = 200) {
   });
 }
 
-function err(message: string, status = 400, extra: Record<string, unknown> = {}) {
-  return new Response(JSON.stringify({ success: false, error: message, ...extra }), {
-    status,
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
-  });
+function err(message: string, status = 400, extra?: unknown) {
+  return new Response(
+    JSON.stringify({ success: false, error: message, ...(extra as object) }),
+    {
+      status,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    }
+  );
 }
 
-async function parseJsonBody(req: Request): Promise<any> {
+async function parseJsonBody(req: Request): Promise<any | null> {
   try {
     return await req.json();
   } catch {
@@ -51,7 +47,7 @@ async function parseJsonBody(req: Request): Promise<any> {
   }
 }
 
-// ─── Route handlers ─────────────────────────────────────────────────────────
+// ─── Route handlers ─────────────────────────────────────────────────────
 
 async function handleHealth(): Promise<Response> {
   return ok({
@@ -62,18 +58,16 @@ async function handleHealth(): Promise<Response> {
 }
 
 async function handleRequest(body: any): Promise<Response> {
-  const required = ["trip_id", "from_stop_id", "to_stop_id"];
-  for (const field of required) {
-    if (!body[field]) return err(`Missing required field: ${field}`);
-  }
-
-  if (!body.anonymous_id && !body.user_id) {
-    return err("Either anonymous_id or user_id is required");
-  }
-
   const seats = Number(body.requested_seats ?? 1);
-  if (!Number.isInteger(seats) || seats < 1 || seats > 10) {
-    return err("requested_seats must be an integer between 1 and 10");
+  if (
+    !body.trip_id ||
+    !body.from_stop_id ||
+    !body.to_stop_id ||
+    !body.anonymous_id
+  ) {
+    return err(
+      "Missing required fields: trip_id, from_stop_id, to_stop_id, anonymous_id"
+    );
   }
 
   try {
@@ -84,7 +78,7 @@ async function handleRequest(body: any): Promise<Response> {
         ${body.to_stop_id}::uuid,
         ${seats}::integer,
         ${body.user_id ?? null}::uuid,
-        ${body.anonymous_id ?? null}::text,
+        ${body.anonymous_id}::text,
         ${body.passenger_name ?? null}::text,
         ${body.passenger_phone ?? null}::text,
         ${body.preferred_seat ?? null}::integer
@@ -105,10 +99,8 @@ async function handleRequest(body: any): Promise<Response> {
 }
 
 async function handleCancel(body: any): Promise<Response> {
-  if (!body.handoff_id) return err("Missing required field: handoff_id");
-
-  if (!body.anonymous_id && !body.user_id) {
-    return err("Either anonymous_id or user_id is required");
+  if (!body.handoff_id) {
+    return err("Missing required field: handoff_id");
   }
 
   try {
@@ -127,7 +119,7 @@ async function handleCancel(body: any): Promise<Response> {
       return err(result.error ?? "Cancel failed", 400, result);
     }
 
-    return ok(result, 200);
+    return ok(result);
   } catch (e: any) {
     return err(e?.message ?? "Internal error", 500);
   }
@@ -149,6 +141,8 @@ async function handleStatus(url: URL): Promise<Response> {
         h.requested_seats,
         h.from_stop_id,
         h.to_stop_id,
+        fs.name as from_stop_name,
+        ts.name as to_stop_name,
         h.created_at,
         h.expires_at,
         h.accepted_at,
@@ -162,6 +156,8 @@ async function handleStatus(url: URL): Promise<Response> {
         r.origin as route_origin,
         r.destination as route_destination
       from booking_handoffs h
+      left join stops fs on fs.id = h.from_stop_id
+      left join stops ts on ts.id = h.to_stop_id
       left join pickup_notifications p on p.handoff_id = h.id
       left join trips t on t.id = h.trip_id
       left join routes r on r.id = t.route_id
@@ -194,12 +190,16 @@ async function handleRecover(body: any): Promise<Response> {
         h.requested_seats,
         h.from_stop_id,
         h.to_stop_id,
+        fs.name as from_stop_name,
+        ts.name as to_stop_name,
         h.created_at,
         h.expires_at,
         t.trip_code,
         r.origin as route_origin,
         r.destination as route_destination
       from booking_handoffs h
+      left join stops fs on fs.id = h.from_stop_id
+      left join stops ts on ts.id = h.to_stop_id
       left join trips t on t.id = h.trip_id
       left join routes r on r.id = t.route_id
       where h.passenger_phone = ${body.passenger_phone}
@@ -213,7 +213,7 @@ async function handleRecover(body: any): Promise<Response> {
   }
 }
 
-// ─── Server ─────────────────────────────────────────────────────────────────
+// ─── Server ─────────────────────────────────────────────────────────────
 
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -227,40 +227,34 @@ serve(async (req: Request) => {
   if (!pathname.startsWith("/")) pathname = "/" + pathname;
 
   try {
-    // Health check
     if (pathname === "/health" || pathname === "/") {
       return await handleHealth();
     }
 
-    // POST /booking/request
     if (pathname === "/booking/request" && req.method === "POST") {
       const body = await parseJsonBody(req);
       if (!body) return err("Invalid JSON body");
       return await handleRequest(body);
     }
 
-    // POST /booking/cancel
     if (pathname === "/booking/cancel" && req.method === "POST") {
       const body = await parseJsonBody(req);
       if (!body) return err("Invalid JSON body");
       return await handleCancel(body);
     }
 
-    // GET /booking/status?reference=...
     if (pathname === "/booking/status" && req.method === "GET") {
       return await handleStatus(url);
     }
 
-    // POST /booking/recover
     if (pathname === "/booking/recover" && req.method === "POST") {
       const body = await parseJsonBody(req);
       if (!body) return err("Invalid JSON body");
       return await handleRecover(body);
     }
 
-    // Fallback
     return err("Not found", 404);
   } catch (e: any) {
-    return err(e?.message ?? "Internal Server Error", 500);
+    return err(e?.message ?? "Internal error", 500);
   }
 });

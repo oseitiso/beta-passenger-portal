@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Marker, Popup } from "react-leaflet";
 import L from "leaflet";
 import type { PublicBus } from "@/lib/passengerApi";
+import { reverseGeocode } from "@/lib/geo";
 
 interface BusMarkerProps {
   bus: PublicBus;
@@ -17,7 +18,6 @@ const createBusIcon = (selected: boolean, dimmed: boolean) => {
   const bg = dimmed ? "#525252" : selected ? "#f97316" : "#ea580c";
   const border = dimmed ? "#404040" : selected ? "#fff" : "#f97316";
 
-  // Pulse animation only when selected
   const pulseHtml = selected
     ? `
       <span style="
@@ -110,15 +110,46 @@ export function BusMarker({
   dimmed = false,
   onSelect,
 }: BusMarkerProps) {
-  // Force re-render every second so ETA + "Xs ago" stay fresh in popup
+  // ─── ALL HOOKS MUST BE AT THE TOP ───
+  // React requires the same number of hooks on every render. Never call
+  // hooks after a conditional return.
+
   const [, setTick] = useState(0);
   useEffect(() => {
     const t = setInterval(() => setTick((v) => v + 1), 1000);
     return () => clearInterval(t);
   }, []);
 
-  const lat = bus.live?.latitude;
-  const lng = bus.live?.longitude;
+  const lat = bus.live?.latitude ?? null;
+  const lng = bus.live?.longitude ?? null;
+
+  const [placeName, setPlaceName] = useState<string | null>(null);
+  useEffect(() => {
+    if (lat == null || lng == null) {
+      setPlaceName(null);
+      return;
+    }
+    let cancelled = false;
+    reverseGeocode(lat, lng).then((result) => {
+      if (cancelled) return;
+      setPlaceName(result?.short ?? null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [lat, lng]);
+
+  // ─── END OF HOOKS ───
+  // Everything below this line can include early returns safely.
+
+  // Skip markers whose GPS is older than 2 minutes
+  const MAX_AGE_MS = 2 * 60 * 1000;
+  const lastPos = bus.live?.last_position_at;
+  if (lastPos) {
+    const age = Date.now() - new Date(lastPos).getTime();
+    if (isNaN(age) || age > MAX_AGE_MS) return null;
+  }
+
   if (lat == null || lng == null) return null;
 
   const plate = bus.vehicle?.registration_plate ?? "Unknown";
@@ -157,6 +188,22 @@ export function BusMarker({
             {origin} → {destination}
           </div>
 
+          <div
+            style={{
+              display: "flex",
+              alignItems: "flex-start",
+              gap: 6,
+              marginBottom: 8,
+              fontSize: 12,
+              color: "#333",
+            }}
+          >
+            <span style={{ color: "#ea580c", flexShrink: 0 }}>📍</span>
+            <span style={{ fontWeight: 500 }}>
+              {placeName ?? "Location unavailable"}
+            </span>
+          </div>
+
           {etaHuman && (
             <div
               style={{
@@ -167,9 +214,7 @@ export function BusMarker({
                 marginBottom: 8,
               }}
             >
-              <div
-                style={{ color: "#9a3412", fontSize: 10, fontWeight: 600 }}
-              >
+              <div style={{ color: "#9a3412", fontSize: 10, fontWeight: 600 }}>
                 ARRIVES IN
               </div>
               <div

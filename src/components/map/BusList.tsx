@@ -189,10 +189,23 @@ export function BusList({
                     </span>
                   </div>
 
-                  <div className="mt-1.5 truncate text-xs text-neutral-300">
-                    {origin} <span className="text-neutral-600">→</span>{" "}
-                    {destination}
-                  </div>
+                  {/* Show booked segment if this bus is your booking, otherwise show full route */}
+                  {isBookingHere && activeBooking ? (
+                    <div className="mt-1.5 truncate text-xs text-orange-300">
+                      {activeBooking.from_stop_name ??
+                        activeBooking.route_origin ??
+                        "—"}{" "}
+                      <span className="text-neutral-600">→</span>{" "}
+                      {activeBooking.to_stop_name ??
+                        activeBooking.route_destination ??
+                        "—"}
+                    </div>
+                  ) : (
+                    <div className="mt-1.5 truncate text-xs text-neutral-300">
+                      {origin} <span className="text-neutral-600">→</span>{" "}
+                      {destination}
+                    </div>
+                  )}
 
                   <div className="mt-1.5 flex items-center gap-3 text-xs text-neutral-500">
                     <span className="flex items-center gap-1">
@@ -294,12 +307,14 @@ function BookingExpandedCard({
       <div className="mb-3 grid grid-cols-2 gap-2 text-xs">
         <div>
           <div className="text-[10px] uppercase text-neutral-500">From</div>
-          <div className="text-neutral-200">{booking.route_origin ?? "—"}</div>
+          <div className="text-neutral-200">
+            {booking.from_stop_name ?? booking.route_origin ?? "—"}
+          </div>
         </div>
         <div>
           <div className="text-[10px] uppercase text-neutral-500">To</div>
           <div className="text-neutral-200">
-            {booking.route_destination ?? "—"}
+            {booking.to_stop_name ?? booking.route_destination ?? "—"}
           </div>
         </div>
         <div>

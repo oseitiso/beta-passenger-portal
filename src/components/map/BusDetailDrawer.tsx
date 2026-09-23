@@ -11,8 +11,11 @@ import {
   Route as RouteIcon,
   Crosshair,
   Ticket,
+  Navigation,
+  Compass,
 } from "lucide-react";
 import type { PublicBus } from "@/lib/passengerApi";
+import { reverseGeocode } from "@/lib/geo";
 
 interface BusDetailDrawerProps {
   bus: PublicBus;
@@ -51,6 +54,12 @@ function formatArrivalClock(
   });
 }
 
+function compassDirection(heading: number): string {
+  const dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+  const idx = Math.round(heading / 45) % 8;
+  return dirs[idx];
+}
+
 export function BusDetailDrawer({
   bus,
   onClose,
@@ -71,6 +80,26 @@ export function BusDetailDrawer({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  const lat = bus.live?.latitude;
+  const lng = bus.live?.longitude;
+
+  // Reverse-geocode the bus's current position
+  const [placeName, setPlaceName] = useState<string | null>(null);
+  useEffect(() => {
+    if (lat == null || lng == null) {
+      setPlaceName(null);
+      return;
+    }
+    let cancelled = false;
+    reverseGeocode(lat, lng).then((result) => {
+      if (cancelled) return;
+      setPlaceName(result?.short ?? null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [lat, lng]);
 
   const plate = bus.vehicle?.registration_plate ?? "Unknown";
   const origin = bus.route?.origin ?? "—";
@@ -94,7 +123,6 @@ export function BusDetailDrawer({
       ? Math.min(100, Math.round((passengers / capacity) * 100))
       : 0;
 
-  // Only allow booking when the bus is in progress and has room
   const canBook =
     status === "IN_PROGRESS" &&
     capacity != null &&
@@ -152,6 +180,22 @@ export function BusDetailDrawer({
         </div>
       )}
 
+      {/* Current location (place name) */}
+      <div className="flex-shrink-0 border-b border-neutral-800 bg-neutral-900/40 px-4 py-4">
+        <div className="flex items-center gap-1.5 text-xs font-medium text-neutral-500">
+          <Navigation className="h-3 w-3" />
+          CURRENT LOCATION
+        </div>
+        <div className="mt-1.5 text-base font-semibold text-neutral-100">
+          {placeName ?? "Location unavailable"}
+        </div>
+        {lat != null && lng != null && (
+          <div className="mt-1 font-mono text-[11px] text-neutral-500">
+            {lat.toFixed(5)}, {lng.toFixed(5)}
+          </div>
+        )}
+      </div>
+
       {/* Route header */}
       <div className="flex-shrink-0 border-b border-neutral-800 px-4 py-4">
         <div className="flex items-center gap-2 text-xs font-medium text-neutral-500">
@@ -176,9 +220,9 @@ export function BusDetailDrawer({
           value={`${speed} km/h`}
         />
         <Stat
-          icon={<MapPin className="h-4 w-4" />}
+          icon={<Compass className="h-4 w-4" />}
           label="Heading"
-          value={`${heading}°`}
+          value={`${compassDirection(heading)} ${heading}°`}
         />
         <Stat
           icon={<Users className="h-4 w-4" />}
@@ -232,32 +276,17 @@ export function BusDetailDrawer({
         </div>
       </div>
 
-      {/* Coordinates */}
-      <div className="flex-shrink-0 px-4 py-4">
-        <div className="mb-2 text-xs font-medium text-neutral-500">
-          POSITION
-        </div>
-        <div className="grid grid-cols-2 gap-3 text-xs">
-          <div>
-            <div className="mb-1 text-neutral-600">LAT</div>
-            <div className="font-mono text-neutral-300">
-              {bus.live?.latitude?.toFixed(5) ?? "—"}
-            </div>
+      {/* Distance remaining */}
+      {remainingKm != null && (
+        <div className="flex-shrink-0 border-b border-neutral-800 px-4 py-4">
+          <div className="mb-2 text-xs font-medium text-neutral-500">
+            DISTANCE REMAINING
           </div>
-          <div>
-            <div className="mb-1 text-neutral-600">LNG</div>
-            <div className="font-mono text-neutral-300">
-              {bus.live?.longitude?.toFixed(5) ?? "—"}
-            </div>
-          </div>
-          <div className="col-span-2">
-            <div className="mb-1 text-neutral-600">REMAINING</div>
-            <div className="font-mono text-neutral-300">
-              {remainingKm != null ? `${remainingKm.toFixed(1)} km` : "—"}
-            </div>
+          <div className="text-lg font-semibold text-neutral-100">
+            {remainingKm.toFixed(1)} km
           </div>
         </div>
-      </div>
+      )}
 
       {/* Actions */}
       <div className="mt-auto flex-shrink-0 space-y-2 border-t border-neutral-800 p-4">

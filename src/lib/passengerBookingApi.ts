@@ -6,16 +6,16 @@ const API_BASE =
 
 const ANON_KEY =
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh6bXBuY2R5Z2tlcXZvc3p1bmZ0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk1Nzg3NzAsImV4cCI6MjEwNTE1NDc3MH0.XAFIVcB5iZjHg6uczZRdjvYAKZbq5sMWb0l-eVCrBjs";
+  "sb_publishable_o2CPNKg49wAwJysjiGp08A_V0ZYeZjH";
 
-// ─── Types ──────────────────────────────────────────────────────────────────
+// ─── Types ──────────────────────────────────────────────────────────────
 
 export interface BookingRequest {
   trip_id: string;
   from_stop_id: string;
   to_stop_id: string;
   requested_seats?: number;
-  anonymous_id: string;
+  user_id?: string;
   passenger_name?: string;
   passenger_phone?: string;
   preferred_seat?: number;
@@ -42,6 +42,8 @@ export interface BookingDetail {
   requested_seats: number;
   from_stop_id: string;
   to_stop_id: string;
+  from_stop_name: string | null;
+  to_stop_name: string | null;
   created_at: string;
   expires_at: string;
   accepted_at: string | null;
@@ -49,14 +51,14 @@ export interface BookingDetail {
   pickup_id: string | null;
   pickup_status: string | null;
   driver_id: string | null;
-  trip_code: string;
-  trip_status: string;
-  route_name: string;
+  trip_code: string | null;
+  trip_status: string | null;
+  route_name: string | null;
   route_origin: string | null;
   route_destination: string | null;
 }
 
-// ─── Anonymous ID management ────────────────────────────────────────────────
+// ─── Anonymous ID management ────────────────────────────────────────────
 
 const ANON_ID_KEY = "b-eta-anonymous-id";
 const BOOKING_STORAGE_KEY = "b-eta-active-booking";
@@ -65,7 +67,10 @@ export function getOrCreateAnonymousId(): string {
   if (typeof window === "undefined") return "";
   let id = localStorage.getItem(ANON_ID_KEY);
   if (!id) {
-    id = `anon-${crypto.randomUUID()}`;
+    id =
+      "anon-" +
+      Math.random().toString(36).slice(2) +
+      Date.now().toString(36);
     localStorage.setItem(ANON_ID_KEY, id);
   }
   return id;
@@ -104,41 +109,45 @@ export function clearActiveBooking(): void {
   localStorage.removeItem(BOOKING_STORAGE_KEY);
 }
 
-// ─── HTTP ───────────────────────────────────────────────────────────────────
+// ─── HTTP ───────────────────────────────────────────────────────────────
 
-async function post<T>(path: string, body: object): Promise<T> {
+async function post<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       apikey: ANON_KEY,
+      Authorization: `Bearer ${ANON_KEY}`,
     },
     body: JSON.stringify(body),
   });
-  const data = (await res.json()) as any;
-  if (!res.ok && !data.error) {
-    throw new Error(`API ${path} failed: ${res.status}`);
+  const text = await res.text();
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error(`API ${path} returned invalid JSON: ${text.slice(0, 200)}`);
   }
-  return data as T;
 }
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "GET",
     headers: {
-      apikey: ANON_KEY,
       Accept: "application/json",
+      apikey: ANON_KEY,
+      Authorization: `Bearer ${ANON_KEY}`,
     },
     cache: "no-store",
   });
-  const data = (await res.json()) as any;
-  if (!res.ok && !data.error) {
-    throw new Error(`API ${path} failed: ${res.status}`);
+  const text = await res.text();
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error(`API ${path} returned invalid JSON: ${text.slice(0, 200)}`);
   }
-  return data as T;
 }
 
-// ─── Public methods ─────────────────────────────────────────────────────────
+// ─── Public methods ─────────────────────────────────────────────────────
 
 export async function requestBooking(
   req: Omit<BookingRequest, "anonymous_id">
@@ -153,7 +162,12 @@ export async function requestBooking(
 
 export async function cancelBooking(
   handoffId: string
-): Promise<{ success: boolean; status?: string; cooldown_until?: string | null; error?: string }> {
+): Promise<{
+  success: boolean;
+  status?: string;
+  cooldown_until?: string | null;
+  error?: string;
+}> {
   const anonymous_id = getOrCreateAnonymousId();
   return post("/booking/cancel", {
     handoff_id: handoffId,
