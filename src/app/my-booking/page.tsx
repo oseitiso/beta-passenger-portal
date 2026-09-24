@@ -14,6 +14,7 @@ import {
   MapPin,
   KeyRound,
   AlertCircle,
+  Flag,
 } from "lucide-react";
 import {
   getActiveBooking,
@@ -36,7 +37,6 @@ export default function MyBookingPage() {
     setMounted(true);
   }, []);
 
-  // Tick every second for countdowns
   useEffect(() => {
     const t = setInterval(() => setTick((v) => v + 1), 1000);
     return () => clearInterval(t);
@@ -107,6 +107,16 @@ export default function MyBookingPage() {
       </div>
     );
   }
+
+  // Booking is "recent" for report purposes if PENDING/ACCEPTED/COMPLETED
+  // within last 48 hours.
+  const isRecentForReport =
+    booking &&
+    (booking.handoff_status === "PENDING" ||
+      booking.handoff_status === "ACCEPTED" ||
+      (booking.handoff_status === "COMPLETED" &&
+        new Date(booking.created_at).getTime() >
+          Date.now() - 48 * 60 * 60 * 1000));
 
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100">
@@ -208,9 +218,7 @@ export default function MyBookingPage() {
                     Boarding
                   </div>
                   <div className="mt-0.5 text-sm font-semibold text-neutral-100">
-                    {booking.from_stop_name ??
-                      booking.route_origin ??
-                      "—"}
+                    {booking.from_stop_name ?? booking.route_origin ?? "—"}
                   </div>
                 </div>
                 <div className="text-neutral-600">→</div>
@@ -219,9 +227,7 @@ export default function MyBookingPage() {
                     Alighting
                   </div>
                   <div className="mt-0.5 text-sm font-semibold text-neutral-100">
-                    {booking.to_stop_name ??
-                      booking.route_destination ??
-                      "—"}
+                    {booking.to_stop_name ?? booking.route_destination ?? "—"}
                   </div>
                 </div>
               </div>
@@ -281,6 +287,17 @@ export default function MyBookingPage() {
               </div>
             )}
 
+            {/* Report a problem — visible for active & recently completed bookings */}
+            {isRecentForReport && (
+              <Link
+                href={`/help?handoff=${booking.handoff_id}`}
+                className="flex w-full items-center justify-center gap-2 rounded-lg border border-neutral-700 bg-neutral-900 px-4 py-2.5 text-sm font-medium text-neutral-200 transition-colors hover:bg-neutral-800"
+              >
+                <Flag className="h-4 w-4 text-orange-400" />
+                Report a problem
+              </Link>
+            )}
+
             {/* Finished states */}
             {(booking.handoff_status === "CANCELLED" ||
               booking.handoff_status === "EXPIRED" ||
@@ -312,7 +329,6 @@ function StatusBanner({
 }) {
   const status = booking.handoff_status;
 
-  // Compute expiry countdown
   const expiresAt = new Date(booking.expires_at).getTime();
   const now = Date.now();
   const remainingSec = Math.max(0, Math.floor((expiresAt - now) / 1000));
@@ -337,7 +353,11 @@ function StatusBanner({
           <div className="mt-1 text-xs text-blue-300/70">
             The driver has up to 10 minutes to respond.
             {remainingSec > 0 && (
-              <> Expires in <span className="font-mono">{remainingClock}</span>.</>
+              <>
+                {" "}
+                Expires in{" "}
+                <span className="font-mono">{remainingClock}</span>.
+              </>
             )}
           </div>
         </div>
@@ -354,8 +374,8 @@ function StatusBanner({
             Driver confirmed your seat
           </div>
           <div className="mt-1 text-xs text-green-300/70">
-            Head to <span className="font-medium">{boardingName}</span>.
-            Show the PIN below to the driver when the bus arrives.
+            Head to <span className="font-medium">{boardingName}</span>. Show the
+            PIN below to the driver when the bus arrives.
           </div>
         </div>
       </div>
@@ -371,8 +391,9 @@ function StatusBanner({
             You are on the bus
           </div>
           <div className="mt-1 text-xs text-green-300/70">
-            Enjoy your trip to <span className="font-medium">{alightingName}</span>.
-            Pay the driver in cash if you haven't already.
+            Enjoy your trip to{" "}
+            <span className="font-medium">{alightingName}</span>. Pay the driver
+            in cash if you haven&apos;t already.
           </div>
         </div>
       </div>
@@ -404,7 +425,7 @@ function StatusBanner({
             Request expired
           </div>
           <div className="mt-1 text-xs text-amber-300/70">
-            The driver didn't respond within 10 minutes.
+            The driver didn&apos;t respond within 10 minutes.
           </div>
         </div>
       </div>
