@@ -110,13 +110,15 @@ export default function MyBookingPage() {
 
   // Booking is "recent" for report purposes if PENDING/ACCEPTED/COMPLETED
   // within last 48 hours.
+    // Show "Report a problem" for all states EXCEPT:
+  //   - COMPLETED older than 48 hours (too late to act on)
+  // Everything else — including CANCELLED, DECLINED, EXPIRED, NO_SHOW — is
+  // a legitimate state to complain about ("bus never came", "driver declined me").
   const isRecentForReport =
     booking &&
-    (booking.handoff_status === "PENDING" ||
-      booking.handoff_status === "ACCEPTED" ||
-      (booking.handoff_status === "COMPLETED" &&
-        new Date(booking.created_at).getTime() >
-          Date.now() - 48 * 60 * 60 * 1000));
+    (booking.handoff_status !== "COMPLETED" ||
+      new Date(booking.created_at).getTime() >
+        Date.now() - 48 * 60 * 60 * 1000);
 
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100">
