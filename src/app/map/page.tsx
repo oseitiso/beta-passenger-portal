@@ -75,6 +75,97 @@ function findNearestLocation(lat: number, lng: number): BotswanaLocation | null 
   return best;
 }
 
+// ─── Boarding-stop eligibility (mirrors server-side is_stop_boardable) ──
+
+interface BoardableResult {
+  bookable: boolean;
+  reason?: string;
+  distance_km?: number;
+  eta_minutes?: number;
+}
+
+function haversineKm(
+  lat1: number, lng1: number,
+  lat2: number, lng2: number
+): number {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+function isStopBoardableForBus(
+  bus: PublicBus,
+  fromStopName: string
+): BoardableResult {
+  const stops = bus.route?.stops ?? [];
+  const busLat = bus.live?.latitude;
+  const busLng = bus.live?.longitude;
+
+  if (stops.length === 0 || busLat == null || busLng == null) {
+    return { bookable: false, reason: "no_data" };
+  }
+
+  // Match the user's FROM pick against the route's stops
+  const fromIdx = stops.findIndex((s) => {
+    const a = s.name.toLowerCase().replace(/\s+(bus\s+)?(rank|stop|station)$/i, "").trim();
+    const b = fromStopName.toLowerCase().replace(/\s+(bus\s+)?(rank|stop|station)$/i, "").trim();
+    return a === b || a.includes(b) || b.includes(a);
+  });
+
+  if (fromIdx === -1) {
+    return { bookable: false, reason: "stop_not_on_route" };
+  }
+
+  const fromStop = stops[fromIdx];
+  if (fromStop.lat == null || fromStop.lng == null) {
+    return { bookable: false, reason: "stop_no_coords" };
+  }
+
+  // Find nearest stop on the route to the bus's current position
+  let nearestIdx = 0;
+  let nearestDist = Infinity;
+  stops.forEach((s, i) => {
+    if (s.lat == null || s.lng == null) return;
+    const d = haversineKm(busLat, busLng, s.lat, s.lng);
+    if (d < nearestDist) {
+      nearestDist = d;
+      nearestIdx = i;
+    }
+  });
+
+  // Rule 1: bus has already passed the boarding stop
+  if (nearestIdx > fromIdx) {
+    return { bookable: false, reason: "already_passed" };
+  }
+
+  // Rule 2: ETA buffer of 5 minutes
+  const distKm = haversineKm(busLat, busLng, fromStop.lat, fromStop.lng);
+  const speed = bus.live?.speed_kph ?? 0;
+  const effectiveSpeed = speed < 5 ? 60 : speed;
+  const etaMin = (distKm / effectiveSpeed) * 60;
+
+  if (etaMin < 5) {
+    return {
+      bookable: false,
+      reason: "too_close",
+      distance_km: Math.round(distKm * 10) / 10,
+      eta_minutes: Math.round(etaMin * 10) / 10,
+    };
+  }
+
+  return {
+    bookable: true,
+    distance_km: Math.round(distKm * 10) / 10,
+    eta_minutes: Math.round(etaMin * 10) / 10,
+  };
+}
+
 interface LocationSelectProps {
   label: string;
   value: string;
@@ -416,7 +507,7 @@ export default function MapPage() {
     : null;
 
   // ── FILTER: match against route.stops (terminals + intermediate), with direction ──
-  const sidebarBuses = useMemo(() => {
+    const sidebarBuses = useMemo(() => {
     if (!origin && !destination) return buses;
 
     return buses.filter((b) => {
@@ -445,6 +536,21 @@ export default function MapPage() {
 
       // Direction check: FROM must come before TO
       if (fromIdx !== -1 && toIdx !== -1 && fromIdx >= toIdx) return false;
+
+      // Boarding-stop eligibility (mirrors server-side is_stop_boardable).
+      // Hides the bus from the map when the passenger couldn't actually board
+      // at the chosen FROM stop — because the bus already passed it, or the
+      // ETA is under 5 minutes.
+      if (origin) {
+        const boardable = isStopBoardableForBus(b, origin);
+        if (
+          !boardable.bookable &&
+          (boardable.reason === "already_passed" ||
+            boardable.reason === "too_close")
+        ) {
+          return false;
+        }
+      }
 
       return true;
     });
