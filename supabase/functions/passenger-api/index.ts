@@ -1,4 +1,4 @@
-// B-ETA Passenger API Edge Function — v1.3
+// B-ETA Passenger API Edge Function — v1.4
 // Deploy to: hzmpncdygkeqvoszunfm
 // Public-facing API for the passenger portal. Returns ONLY public bus data.
 // No auth required — passengers see live bus positions.
@@ -7,6 +7,8 @@
 // v1.2 — GET /routes-with-polylines (GeoJSON for map rendering)
 //        GET /stops already exists and now returns all public stops
 // v1.3 — stale cutoff bumped 2 min → 5 min (rural coverage gaps)
+// v1.4 — boarding-stop filter: bus must not have passed the stop,
+//        and ETA to the boarding stop must be > 5 minutes
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import postgres from "https://esm.sh/postgres@3.4.4";
@@ -262,19 +264,38 @@ async function fetchActiveTrips(opts: {
       status: t.status,
     };
 
+    // ── Filtered path: check boarding-stop eligibility + seats ──
     if (opts.fromStopId && opts.toStopId) {
       try {
+        // Step 1: boarding-stop eligibility
+        const boardCheck = await sql<
+          { result: unknown }[]
+        >`select public.is_stop_boardable(${t.trip_id}::uuid, ${opts.fromStopId}::uuid) as result`;
+
+        const boardRaw = boardCheck[0]?.result;
+        const boardability =
+          typeof boardRaw === "string"
+            ? JSON.parse(boardRaw)
+            : (boardRaw as { bookable?: boolean; reason?: string } | null);
+
+        if (boardability && boardability.bookable === false) {
+          // Bus already passed the stop, or is too close to reach in time
+          continue;
+        }
+
+        // Step 2: available seats on the segment
         const rows = await sql<
           { seats: number }[]
-        >`select segment_available_seats(${t.trip_id}::uuid, ${opts.fromStopId}::uuid, ${opts.toStopId}::uuid) as seats`;
+        >`select public.segment_available_seats(${t.trip_id}::uuid, ${opts.fromStopId}::uuid, ${opts.toStopId}::uuid) as seats`;
         const seats = rows[0]?.seats ?? 0;
+
         trip.segment_availability = {
           seats_available: seats,
           from_stop_id: opts.fromStopId,
           to_stop_id: opts.toStopId,
         };
-      } catch {
-        // optional
+      } catch (e) {
+        console.error("[fetchActiveTrips] filter error:", e);
       }
     }
 
@@ -312,7 +333,7 @@ serve(async (req: Request) => {
     if (pathname === "/health" || pathname === "/") {
       return ok({
         status: "B-ETA Passenger API active",
-        version: "1.3.0",
+        version: "1.4.0",
       });
     }
 
