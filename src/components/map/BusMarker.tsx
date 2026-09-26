@@ -143,7 +143,7 @@ export function BusMarker({
   // Everything below this line can include early returns safely.
 
   // Skip markers whose GPS is older than 2 minutes
-  const MAX_AGE_MS = 2 * 60 * 1000;
+  const MAX_AGE_MS = 5 * 60 * 1000;
   const lastPos = bus.live?.last_position_at;
   if (lastPos) {
     const age = Date.now() - new Date(lastPos).getTime();

@@ -1,4 +1,4 @@
-// B-ETA Passenger API Edge Function — v1.2
+// B-ETA Passenger API Edge Function — v1.3
 // Deploy to: hzmpncdygkeqvoszunfm
 // Public-facing API for the passenger portal. Returns ONLY public bus data.
 // No auth required — passengers see live bus positions.
@@ -6,6 +6,7 @@
 // v1.1 — distance_remaining_km + eta_minutes per bus
 // v1.2 — GET /routes-with-polylines (GeoJSON for map rendering)
 //        GET /stops already exists and now returns all public stops
+// v1.3 — stale cutoff bumped 2 min → 5 min (rural coverage gaps)
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import postgres from "https://esm.sh/postgres@3.4.4";
@@ -26,7 +27,7 @@ const sql = postgres(SUPABASE_DB_URL, {
   connect_timeout: 15,
 });
 
-// ─── Types ─────────────────────────────────────────────────────────────────
+// ─── Types ──────────────────────────────────────────────────────────────
 
 interface StopShape {
   stop_id: string;
@@ -75,7 +76,7 @@ interface PublicRoute {
   name: string;
   origin: string | null;
   destination: string | null;
-  polyline: [number, number][] | null;   // array of [lng, lat] as stored
+  polyline: [number, number][] | null;
 }
 
 interface PublicStopFull {
@@ -86,7 +87,7 @@ interface PublicStopFull {
   lng: number;
 }
 
-// ─── Helpers ───────────────────────────────────────────────────────────────
+// ─── Helpers ────────────────────────────────────────────────────────────
 
 function ok(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -207,7 +208,11 @@ async function fetchActiveTrips(opts: {
     left join routes r on r.id = t.route_id
     left join vehicles v on v.id = t.vehicle_id
     left join vehicle_current_state vcs on vcs.vehicle_id = t.vehicle_id
-    where t.status = 'IN_PROGRESS' AND vcs.latitude is not null AND vcs.longitude is not null AND vcs.last_position_at is not null AND vcs.last_position_at > now() - interval '2 minutes'
+    where t.status = 'IN_PROGRESS'
+      AND vcs.latitude is not null
+      AND vcs.longitude is not null
+      AND vcs.last_position_at is not null
+      AND vcs.last_position_at > now() - interval '5 minutes'
     order by t.scheduled_departure desc
   `;
 
@@ -285,7 +290,7 @@ async function fetchActiveTrips(opts: {
   return out;
 }
 
-// ─── Server ────────────────────────────────────────────────────────────────
+// ─── Server ─────────────────────────────────────────────────────────────
 
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -307,7 +312,7 @@ serve(async (req: Request) => {
     if (pathname === "/health" || pathname === "/") {
       return ok({
         status: "B-ETA Passenger API active",
-        version: "1.2.0",
+        version: "1.3.0",
       });
     }
 
@@ -448,7 +453,7 @@ serve(async (req: Request) => {
           polyline: string | null;
         }[]
       >`
-        select 
+        select
           id as route_id,
           name,
           origin,
