@@ -1,4 +1,4 @@
-// B-ETA Passenger API Edge Function — v2.1
+// B-ETA Passenger API Edge Function — v2.2
 // Deploy to: hzmpncdygkeqvoszunfm
 // Public-facing API for the passenger portal. Returns ONLY public bus data.
 //
@@ -10,6 +10,7 @@
 // v1.6 — GET /geocode?q= (forward geocoding proxy)
 // v2.0 — geo-spatial segment filter (is_segment_bookable)
 // v2.1 — FROM-only support (is_stop_on_route_ahead_of_bus)
+// v2.2 — GET /locations/search?q= (mixed local stops + OpenCage)
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import postgres from "https://esm.sh/postgres@3.4.4";
@@ -29,6 +30,14 @@ const sql = postgres(SUPABASE_DB_URL, {
   idle_timeout: 20,
   connect_timeout: 15,
 });
+
+// In-memory cache for /locations/search — 24h TTL per normalized query
+const locationSearchCache = new Map<
+  string,
+  { data: unknown | null; ts: number }
+>();
+
+// ─── Types ──────────────────────────────────────────────────────────────
 
 interface StopShape {
   stop_id: string;
@@ -88,6 +97,8 @@ interface PublicStopFull {
   lat: number;
   lng: number;
 }
+
+// ─── Helpers ────────────────────────────────────────────────────────────
 
 function ok(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -323,7 +334,6 @@ async function fetchActiveTrips(opts: {
   const stopsCache = new Map<string, StopShape[]>();
 
   for (const t of trips) {
-    // Filter
     if (hasSegmentFilter && t.route_id) {
       try {
         const check = await sql<
@@ -464,6 +474,8 @@ async function fetchActiveTrips(opts: {
   return out;
 }
 
+// ─── Server ─────────────────────────────────────────────────────────────
+
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -480,13 +492,15 @@ serve(async (req: Request) => {
   if (!pathname.startsWith("/")) pathname = "/" + pathname;
 
   try {
+    // ── GET /health ───────────────────────────────────────────────────
     if (pathname === "/health" || pathname === "/") {
       return ok({
         status: "B-ETA Passenger API active",
-        version: "2.1.0",
+        version: "2.2.0",
       });
     }
 
+    // ── GET /active-buses ─────────────────────────────────────────────
     if (pathname === "/active-buses") {
       const fromStr = url.searchParams.get("from") ?? undefined;
       const toStr = url.searchParams.get("to") ?? undefined;
@@ -506,6 +520,7 @@ serve(async (req: Request) => {
       return ok({ buses, count: buses.length });
     }
 
+    // ── GET /buses/:trip_id ───────────────────────────────────────────
     const busMatch = pathname.match(/^\/buses\/([^/]+)$/);
     if (busMatch) {
       const tripId = busMatch[1];
@@ -622,6 +637,7 @@ serve(async (req: Request) => {
       return ok(trip);
     }
 
+    // ── GET /routes-with-polylines ────────────────────────────────────
     if (pathname === "/routes-with-polylines") {
       const rows = await sql<
         {
@@ -665,6 +681,7 @@ serve(async (req: Request) => {
       return ok({ routes: result, count: result.length });
     }
 
+    // ── GET /routes ───────────────────────────────────────────────────
     if (pathname === "/routes") {
       const rows = await sql<
         {
@@ -684,6 +701,7 @@ serve(async (req: Request) => {
       return ok(rows);
     }
 
+    // ── GET /geocode?q=Nata,Botswana ──────────────────────────────────
     if (pathname === "/geocode") {
       const q = url.searchParams.get("q");
       if (!q || q.trim().length < 2) {
@@ -753,6 +771,154 @@ serve(async (req: Request) => {
       }
     }
 
+    // ── GET /locations/search?q=Mosetse ───────────────────────────────
+    // Mixed search: local stops first, then OpenCage forward geocode.
+    // Cached in-memory for 24h per normalized query.
+    if (pathname === "/locations/search") {
+      const q = url.searchParams.get("q");
+      if (!q || q.trim().length < 2) {
+        return err("Missing or too-short query parameter: q");
+      }
+
+      const norm = q.trim().toLowerCase();
+
+      const cached = locationSearchCache.get(norm);
+      const now = Date.now();
+      if (cached && cached.data && now - cached.ts < 24 * 60 * 60 * 1000) {
+        return ok(cached.data);
+      }
+
+      try {
+        // 1. Local stop lookup
+        const stopRows = await sql<
+          {
+            id: string;
+            name: string;
+            reverse_geocoded_name: string | null;
+            city: string | null;
+            lat: number | null;
+            lng: number | null;
+          }[]
+        >`
+          select id, name, reverse_geocoded_name, city, lat, lng
+          from public.stops
+          where lat is not null
+            and lng is not null
+            and (
+              lower(name) like ${"%" + norm + "%"}
+              or lower(reverse_geocoded_name) like ${"%" + norm + "%"}
+              or lower(city) like ${"%" + norm + "%"}
+            )
+          order by
+            case when lower(name) = ${norm} then 0
+                 when lower(name) like ${norm + "%"} then 1
+                 else 2 end,
+            name asc
+          limit 8
+        `;
+
+        const stopResults = stopRows.map((r) => ({
+          name: r.name,
+          region: r.city ?? null,
+          lat: r.lat,
+          lng: r.lng,
+          source: "stop_lookup" as const,
+        }));
+
+        // 2. OpenCage fallback
+        let geocodeResults: Array<{
+          name: string;
+          region: string | null;
+          lat: number;
+          lng: number;
+          source: "forward_geocode";
+        }> = [];
+
+        if (stopResults.length < 3) {
+          const apiKey = Deno.env.get("OPENCAGE_API_KEY");
+          if (apiKey) {
+            try {
+              const gurl = new URL(
+                "https://api.opencagedata.com/geocode/v1/json"
+              );
+              gurl.searchParams.set("q", `${q}, Botswana`);
+              gurl.searchParams.set("key", apiKey);
+              gurl.searchParams.set("language", "en");
+              gurl.searchParams.set("no_annotations", "1");
+              gurl.searchParams.set("limit", "5");
+              gurl.searchParams.set("countrycode", "bw");
+
+              const controller = new AbortController();
+              const t = setTimeout(() => controller.abort(), 4000);
+
+              const res = await fetch(gurl.toString(), {
+                signal: controller.signal,
+                cache: "no-store",
+              });
+              clearTimeout(t);
+
+              if (res.ok) {
+                const json = (await res.json()) as {
+                  results?: Array<{
+                    geometry?: { lat: number; lng: number };
+                    formatted?: string;
+                    components?: Record<string, string>;
+                  }>;
+                };
+
+                geocodeResults = (json.results ?? [])
+                  .filter((r) => r.geometry)
+                  .map((r) => {
+                    const c = r.components ?? {};
+                    const primary =
+                      c.village ??
+                      c.town ??
+                      c.city ??
+                      c.suburb ??
+                      c.county ??
+                      r.formatted?.split(",")[0]?.trim() ??
+                      q;
+                    const region = c.county ?? c.state ?? null;
+                    return {
+                      name: primary,
+                      region,
+                      lat: r.geometry!.lat,
+                      lng: r.geometry!.lng,
+                      source: "forward_geocode" as const,
+                    };
+                  })
+                  .filter(
+                    (r, i, arr) =>
+                      arr.findIndex(
+                        (x) => x.name.toLowerCase() === r.name.toLowerCase()
+                      ) === i
+                  );
+              }
+            } catch {
+              // non-fatal
+            }
+          }
+        }
+
+        // Merge + dedupe by lowercase name, prefer local stops
+        const seen = new Set<string>();
+        const merged = [...stopResults, ...geocodeResults].filter((loc) => {
+          const key = loc.name.toLowerCase();
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+
+        const payload = { locations: merged, count: merged.length };
+        locationSearchCache.set(norm, { data: payload, ts: now });
+
+        return ok(payload);
+      } catch (e: any) {
+        return err(e?.message ?? "Search failed", 500);
+      }
+    }
+
+    // ── GET /stops ────────────────────────────────────────────────────
     if (pathname === "/stops") {
       const rows = await sql<
         {
