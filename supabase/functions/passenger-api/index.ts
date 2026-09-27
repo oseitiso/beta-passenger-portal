@@ -1,18 +1,15 @@
-// B-ETA Passenger API Edge Function — v2.0
+// B-ETA Passenger API Edge Function — v2.1
 // Deploy to: hzmpncdygkeqvoszunfm
 // Public-facing API for the passenger portal. Returns ONLY public bus data.
 //
 // v1.1 — distance_remaining_km + eta_minutes per bus
-// v1.2 — GET /routes-with-polylines (GeoJSON for map rendering)
-//        GET /stops already exists and now returns all public stops
-// v1.3 — stale cutoff bumped 2 min → 5 min (rural coverage gaps)
-// v1.4 — boarding-stop filter: bus must not have passed the stop
+// v1.2 — GET /routes-with-polylines
+// v1.3 — stale cutoff 2 min → 5 min
+// v1.4 — boarding-stop filter
 // v1.5 — stops expose reverse_geocoded_name
 // v1.6 — GET /geocode?q= (forward geocoding proxy)
-// v2.0 — full geo-spatial segment filter:
-//        - ?from=Nata&to=Maun (strings, forward-geocoded)
-//        - ?fromLat=&fromLng=&toLat=&toLng= (raw coords)
-//        - Uses public.is_segment_bookable(trip, fromLat, fromLng, toLat, toLng)
+// v2.0 — geo-spatial segment filter (is_segment_bookable)
+// v2.1 — FROM-only support (is_stop_on_route_ahead_of_bus)
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import postgres from "https://esm.sh/postgres@3.4.4";
@@ -32,8 +29,6 @@ const sql = postgres(SUPABASE_DB_URL, {
   idle_timeout: 20,
   connect_timeout: 15,
 });
-
-// ─── Types ──────────────────────────────────────────────────────────────
 
 interface StopShape {
   stop_id: string;
@@ -94,8 +89,6 @@ interface PublicStopFull {
   lng: number;
 }
 
-// ─── Helpers ────────────────────────────────────────────────────────────
-
 function ok(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -149,15 +142,12 @@ async function loadStopsForRoute(routeId: string): Promise<StopShape[]> {
   }));
 }
 
-// ─── Location resolution: name → lat/lng ────────────────────────────────
-
 async function resolveLocation(
   input: string
 ): Promise<{ lat: number; lng: number; display: string; source: string } | null> {
   const norm = input.trim().toLowerCase();
   if (norm.length < 2) return null;
 
-  // 1. Try stop lookup first (fast, no external call)
   const stops = await sql<
     { id: string; name: string; lat: number | null; lng: number | null }[]
   >`
@@ -187,7 +177,6 @@ async function resolveLocation(
     };
   }
 
-  // 2. Forward-geocode via OpenCage
   const apiKey = Deno.env.get("OPENCAGE_API_KEY");
   if (!apiKey) return null;
 
@@ -231,8 +220,6 @@ async function resolveLocation(
   }
 }
 
-// ─── Active trips with geo-spatial segment filter ───────────────────────
-
 async function fetchActiveTrips(opts: {
   from?: string;
   to?: string;
@@ -241,7 +228,6 @@ async function fetchActiveTrips(opts: {
   toLat?: number;
   toLng?: number;
 }): Promise<PublicTrip[]> {
-  // Resolve FROM/TO coordinates
   let fromCoord: { lat: number; lng: number; display: string } | null = null;
   let toCoord: { lat: number; lng: number; display: string } | null = null;
 
@@ -257,6 +243,7 @@ async function fetchActiveTrips(opts: {
     toCoord = await resolveLocation(opts.to);
   }
 
+  const hasFromFilter = fromCoord != null;
   const hasSegmentFilter = fromCoord != null && toCoord != null;
 
   const trips = await sql<
@@ -336,7 +323,7 @@ async function fetchActiveTrips(opts: {
   const stopsCache = new Map<string, StopShape[]>();
 
   for (const t of trips) {
-    // Geo-spatial segment check — skip trip if passenger can't board
+    // Filter
     if (hasSegmentFilter && t.route_id) {
       try {
         const check = await sql<
@@ -362,9 +349,31 @@ async function fetchActiveTrips(opts: {
         console.error("[fetchActiveTrips] segment check error:", e);
         continue;
       }
+    } else if (hasFromFilter && t.route_id) {
+      try {
+        const check = await sql<
+          { result: unknown }[]
+        >`select public.is_stop_on_route_ahead_of_bus(
+          ${t.trip_id}::uuid,
+          ${fromCoord!.lat}::numeric,
+          ${fromCoord!.lng}::numeric
+        ) as result`;
+
+        const raw = check[0]?.result;
+        const parsed =
+          typeof raw === "string"
+            ? JSON.parse(raw)
+            : (raw as { passable?: boolean; reason?: string } | null);
+
+        if (!parsed || parsed.passable !== true) {
+          continue;
+        }
+      } catch (e) {
+        console.error("[fetchActiveTrips] from-only check error:", e);
+        continue;
+      }
     }
 
-    // Load stops
     let stops: StopShape[] = [];
     if (t.route_id) {
       if (stopsCache.has(t.route_id)) {
@@ -407,7 +416,6 @@ async function fetchActiveTrips(opts: {
       status: t.status,
     };
 
-    // Attach segment_availability by nearest-stop match
     if (hasSegmentFilter && t.route_id && stops.length > 0) {
       try {
         const fromStop = stops.reduce<StopShape | null>((best, s) => {
@@ -456,8 +464,6 @@ async function fetchActiveTrips(opts: {
   return out;
 }
 
-// ─── Server ─────────────────────────────────────────────────────────────
-
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -474,15 +480,13 @@ serve(async (req: Request) => {
   if (!pathname.startsWith("/")) pathname = "/" + pathname;
 
   try {
-    // ── GET /health ───────────────────────────────────────────────────
     if (pathname === "/health" || pathname === "/") {
       return ok({
         status: "B-ETA Passenger API active",
-        version: "2.0.0",
+        version: "2.1.0",
       });
     }
 
-    // ── GET /active-buses ─────────────────────────────────────────────
     if (pathname === "/active-buses") {
       const fromStr = url.searchParams.get("from") ?? undefined;
       const toStr = url.searchParams.get("to") ?? undefined;
@@ -502,7 +506,6 @@ serve(async (req: Request) => {
       return ok({ buses, count: buses.length });
     }
 
-    // ── GET /buses/:trip_id ───────────────────────────────────────────
     const busMatch = pathname.match(/^\/buses\/([^/]+)$/);
     if (busMatch) {
       const tripId = busMatch[1];
@@ -619,7 +622,6 @@ serve(async (req: Request) => {
       return ok(trip);
     }
 
-    // ── GET /routes-with-polylines ────────────────────────────────────
     if (pathname === "/routes-with-polylines") {
       const rows = await sql<
         {
@@ -663,7 +665,6 @@ serve(async (req: Request) => {
       return ok({ routes: result, count: result.length });
     }
 
-    // ── GET /routes ───────────────────────────────────────────────────
     if (pathname === "/routes") {
       const rows = await sql<
         {
@@ -683,7 +684,6 @@ serve(async (req: Request) => {
       return ok(rows);
     }
 
-    // ── GET /geocode?q=Nata,Botswana ──────────────────────────────────
     if (pathname === "/geocode") {
       const q = url.searchParams.get("q");
       if (!q || q.trim().length < 2) {
@@ -753,7 +753,6 @@ serve(async (req: Request) => {
       }
     }
 
-    // ── GET /stops ────────────────────────────────────────────────────
     if (pathname === "/stops") {
       const rows = await sql<
         {
