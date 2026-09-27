@@ -1,14 +1,18 @@
-// B-ETA Passenger API Edge Function — v1.4
+// B-ETA Passenger API Edge Function — v2.0
 // Deploy to: hzmpncdygkeqvoszunfm
 // Public-facing API for the passenger portal. Returns ONLY public bus data.
-// No auth required — passengers see live bus positions.
 //
 // v1.1 — distance_remaining_km + eta_minutes per bus
 // v1.2 — GET /routes-with-polylines (GeoJSON for map rendering)
 //        GET /stops already exists and now returns all public stops
 // v1.3 — stale cutoff bumped 2 min → 5 min (rural coverage gaps)
-// v1.4 — boarding-stop filter: bus must not have passed the stop,
-//        and ETA to the boarding stop must be > 5 minutes
+// v1.4 — boarding-stop filter: bus must not have passed the stop
+// v1.5 — stops expose reverse_geocoded_name
+// v1.6 — GET /geocode?q= (forward geocoding proxy)
+// v2.0 — full geo-spatial segment filter:
+//        - ?from=Nata&to=Maun (strings, forward-geocoded)
+//        - ?fromLat=&fromLng=&toLat=&toLng= (raw coords)
+//        - Uses public.is_segment_bookable(trip, fromLat, fromLng, toLat, toLng)
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import postgres from "https://esm.sh/postgres@3.4.4";
@@ -34,6 +38,7 @@ const sql = postgres(SUPABASE_DB_URL, {
 interface StopShape {
   stop_id: string;
   name: string;
+  reverse_geocoded_name: string | null;
   city: string | null;
   lat: number | null;
   lng: number | null;
@@ -110,6 +115,7 @@ async function loadStopsForRoute(routeId: string): Promise<StopShape[]> {
     {
       stop_id: string;
       name: string;
+      reverse_geocoded_name: string | null;
       city: string | null;
       lat: number | null;
       lng: number | null;
@@ -120,6 +126,7 @@ async function loadStopsForRoute(routeId: string): Promise<StopShape[]> {
     select
       s.id as stop_id,
       s.name,
+      s.reverse_geocoded_name,
       s.city,
       s.lat,
       s.lng,
@@ -133,6 +140,7 @@ async function loadStopsForRoute(routeId: string): Promise<StopShape[]> {
   return rows.map((r) => ({
     stop_id: r.stop_id,
     name: r.name,
+    reverse_geocoded_name: r.reverse_geocoded_name,
     city: r.city,
     lat: r.lat,
     lng: r.lng,
@@ -141,10 +149,116 @@ async function loadStopsForRoute(routeId: string): Promise<StopShape[]> {
   }));
 }
 
+// ─── Location resolution: name → lat/lng ────────────────────────────────
+
+async function resolveLocation(
+  input: string
+): Promise<{ lat: number; lng: number; display: string; source: string } | null> {
+  const norm = input.trim().toLowerCase();
+  if (norm.length < 2) return null;
+
+  // 1. Try stop lookup first (fast, no external call)
+  const stops = await sql<
+    { id: string; name: string; lat: number | null; lng: number | null }[]
+  >`
+    select id, name, lat, lng
+    from public.stops
+    where lat is not null
+      and lng is not null
+      and (
+        lower(name) = ${norm}
+        or lower(reverse_geocoded_name) = ${norm}
+        or lower(name) like ${"%" + norm + "%"}
+        or lower(reverse_geocoded_name) like ${"%" + norm + "%"}
+      )
+    order by
+      case when lower(name) = ${norm} then 0
+           when lower(reverse_geocoded_name) = ${norm} then 1
+           else 2 end
+    limit 1
+  `;
+
+  if (stops.length > 0 && stops[0].lat != null && stops[0].lng != null) {
+    return {
+      lat: Number(stops[0].lat),
+      lng: Number(stops[0].lng),
+      display: stops[0].name,
+      source: "stop_lookup",
+    };
+  }
+
+  // 2. Forward-geocode via OpenCage
+  const apiKey = Deno.env.get("OPENCAGE_API_KEY");
+  if (!apiKey) return null;
+
+  try {
+    const url = new URL("https://api.opencagedata.com/geocode/v1/json");
+    url.searchParams.set("q", `${input}, Botswana`);
+    url.searchParams.set("key", apiKey);
+    url.searchParams.set("language", "en");
+    url.searchParams.set("no_annotations", "1");
+    url.searchParams.set("limit", "1");
+    url.searchParams.set("countrycode", "bw");
+
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), 4000);
+    const res = await fetch(url.toString(), {
+      signal: controller.signal,
+      cache: "no-store",
+    });
+    clearTimeout(t);
+
+    if (!res.ok) return null;
+
+    const json = (await res.json()) as {
+      results?: Array<{
+        geometry?: { lat: number; lng: number };
+        formatted?: string;
+      }>;
+    };
+
+    const first = json.results?.[0];
+    if (!first?.geometry) return null;
+
+    return {
+      lat: first.geometry.lat,
+      lng: first.geometry.lng,
+      display: first.formatted ?? input,
+      source: "forward_geocode",
+    };
+  } catch {
+    return null;
+  }
+}
+
+// ─── Active trips with geo-spatial segment filter ───────────────────────
+
 async function fetchActiveTrips(opts: {
-  fromStopId?: string;
-  toStopId?: string;
+  from?: string;
+  to?: string;
+  fromLat?: number;
+  fromLng?: number;
+  toLat?: number;
+  toLng?: number;
 }): Promise<PublicTrip[]> {
+  // Resolve FROM/TO coordinates
+  let fromCoord: { lat: number; lng: number; display: string } | null = null;
+  let toCoord: { lat: number; lng: number; display: string } | null = null;
+
+  if (opts.fromLat != null && opts.fromLng != null) {
+    fromCoord = { lat: opts.fromLat, lng: opts.fromLng, display: "provided" };
+  } else if (opts.from) {
+    fromCoord = await resolveLocation(opts.from);
+  }
+
+  if (opts.toLat != null && opts.toLng != null) {
+    toCoord = { lat: opts.toLat, lng: opts.toLng, display: "provided" };
+  } else if (opts.to) {
+    toCoord = await resolveLocation(opts.to);
+  }
+
+  const hasSegmentFilter = fromCoord != null && toCoord != null;
+
   const trips = await sql<
     {
       trip_id: string;
@@ -222,6 +336,35 @@ async function fetchActiveTrips(opts: {
   const stopsCache = new Map<string, StopShape[]>();
 
   for (const t of trips) {
+    // Geo-spatial segment check — skip trip if passenger can't board
+    if (hasSegmentFilter && t.route_id) {
+      try {
+        const check = await sql<
+          { result: unknown }[]
+        >`select public.is_segment_bookable(
+          ${t.trip_id}::uuid,
+          ${fromCoord!.lat}::numeric,
+          ${fromCoord!.lng}::numeric,
+          ${toCoord!.lat}::numeric,
+          ${toCoord!.lng}::numeric
+        ) as result`;
+
+        const raw = check[0]?.result;
+        const parsed =
+          typeof raw === "string"
+            ? JSON.parse(raw)
+            : (raw as { bookable?: boolean; reason?: string } | null);
+
+        if (!parsed || parsed.bookable !== true) {
+          continue;
+        }
+      } catch (e) {
+        console.error("[fetchActiveTrips] segment check error:", e);
+        continue;
+      }
+    }
+
+    // Load stops
     let stops: StopShape[] = [];
     if (t.route_id) {
       if (stopsCache.has(t.route_id)) {
@@ -264,48 +407,50 @@ async function fetchActiveTrips(opts: {
       status: t.status,
     };
 
-    // ── Filtered path: check boarding-stop eligibility + seats ──
-    if (opts.fromStopId && opts.toStopId) {
+    // Attach segment_availability by nearest-stop match
+    if (hasSegmentFilter && t.route_id && stops.length > 0) {
       try {
-        // Step 1: boarding-stop eligibility
-        const boardCheck = await sql<
-          { result: unknown }[]
-        >`select public.is_stop_boardable(${t.trip_id}::uuid, ${opts.fromStopId}::uuid) as result`;
+        const fromStop = stops.reduce<StopShape | null>((best, s) => {
+          if (s.lat == null || s.lng == null) return best;
+          const d =
+            Math.pow(s.lat - fromCoord!.lat, 2) +
+            Math.pow(s.lng - fromCoord!.lng, 2);
+          if (!best || best.lat == null) return s;
+          const bd =
+            Math.pow(best.lat - fromCoord!.lat, 2) +
+            Math.pow((best.lng ?? 0) - fromCoord!.lng, 2);
+          return d < bd ? s : best;
+        }, null);
 
-        const boardRaw = boardCheck[0]?.result;
-        const boardability =
-          typeof boardRaw === "string"
-            ? JSON.parse(boardRaw)
-            : (boardRaw as { bookable?: boolean; reason?: string } | null);
+        const toStop = stops.reduce<StopShape | null>((best, s) => {
+          if (s.lat == null || s.lng == null) return best;
+          const d =
+            Math.pow(s.lat - toCoord!.lat, 2) +
+            Math.pow(s.lng - toCoord!.lng, 2);
+          if (!best || best.lat == null) return s;
+          const bd =
+            Math.pow(best.lat - toCoord!.lat, 2) +
+            Math.pow((best.lng ?? 0) - toCoord!.lng, 2);
+          return d < bd ? s : best;
+        }, null);
 
-        if (boardability && boardability.bookable === false) {
-          // Bus already passed the stop, or is too close to reach in time
-          continue;
+        if (fromStop && toStop && fromStop.stop_id !== toStop.stop_id) {
+          const rows = await sql<
+            { seats: number }[]
+          >`select public.segment_available_seats(${t.trip_id}::uuid, ${fromStop.stop_id}::uuid, ${toStop.stop_id}::uuid) as seats`;
+          const seats = rows[0]?.seats ?? 0;
+          trip.segment_availability = {
+            seats_available: seats,
+            from_stop_id: fromStop.stop_id,
+            to_stop_id: toStop.stop_id,
+          };
         }
-
-        // Step 2: available seats on the segment
-        const rows = await sql<
-          { seats: number }[]
-        >`select public.segment_available_seats(${t.trip_id}::uuid, ${opts.fromStopId}::uuid, ${opts.toStopId}::uuid) as seats`;
-        const seats = rows[0]?.seats ?? 0;
-
-        trip.segment_availability = {
-          seats_available: seats,
-          from_stop_id: opts.fromStopId,
-          to_stop_id: opts.toStopId,
-        };
       } catch (e) {
-        console.error("[fetchActiveTrips] filter error:", e);
+        console.error("[fetchActiveTrips] segment seats error:", e);
       }
     }
 
     out.push(trip);
-  }
-
-  if (opts.fromStopId && opts.toStopId) {
-    return out.filter(
-      (t) => (t.segment_availability?.seats_available ?? 0) > 0
-    );
   }
 
   return out;
@@ -329,24 +474,35 @@ serve(async (req: Request) => {
   if (!pathname.startsWith("/")) pathname = "/" + pathname;
 
   try {
-    // ── GET /health ──────────────────────────────────────────────────────
+    // ── GET /health ───────────────────────────────────────────────────
     if (pathname === "/health" || pathname === "/") {
       return ok({
         status: "B-ETA Passenger API active",
-        version: "1.4.0",
+        version: "2.0.0",
       });
     }
 
-    // ── GET /active-buses ────────────────────────────────────────────────
+    // ── GET /active-buses ─────────────────────────────────────────────
     if (pathname === "/active-buses") {
-      const fromStopId = url.searchParams.get("from") ?? undefined;
-      const toStopId = url.searchParams.get("to") ?? undefined;
+      const fromStr = url.searchParams.get("from") ?? undefined;
+      const toStr = url.searchParams.get("to") ?? undefined;
+      const fromLat = url.searchParams.get("fromLat");
+      const fromLng = url.searchParams.get("fromLng");
+      const toLat = url.searchParams.get("toLat");
+      const toLng = url.searchParams.get("toLng");
 
-      const buses = await fetchActiveTrips({ fromStopId, toStopId });
+      const buses = await fetchActiveTrips({
+        from: fromStr,
+        to: toStr,
+        fromLat: fromLat != null ? Number(fromLat) : undefined,
+        fromLng: fromLng != null ? Number(fromLng) : undefined,
+        toLat: toLat != null ? Number(toLat) : undefined,
+        toLng: toLng != null ? Number(toLng) : undefined,
+      });
       return ok({ buses, count: buses.length });
     }
 
-    // ── GET /buses/:trip_id ──────────────────────────────────────────────
+    // ── GET /buses/:trip_id ───────────────────────────────────────────
     const busMatch = pathname.match(/^\/buses\/([^/]+)$/);
     if (busMatch) {
       const tripId = busMatch[1];
@@ -463,7 +619,7 @@ serve(async (req: Request) => {
       return ok(trip);
     }
 
-    // ── GET /routes-with-polylines ───────────────────────────────────────
+    // ── GET /routes-with-polylines ────────────────────────────────────
     if (pathname === "/routes-with-polylines") {
       const rows = await sql<
         {
@@ -507,7 +663,7 @@ serve(async (req: Request) => {
       return ok({ routes: result, count: result.length });
     }
 
-    // ── GET /routes ──────────────────────────────────────────────────────
+    // ── GET /routes ───────────────────────────────────────────────────
     if (pathname === "/routes") {
       const rows = await sql<
         {
@@ -527,7 +683,77 @@ serve(async (req: Request) => {
       return ok(rows);
     }
 
-    // ── GET /stops ───────────────────────────────────────────────────────
+    // ── GET /geocode?q=Nata,Botswana ──────────────────────────────────
+    if (pathname === "/geocode") {
+      const q = url.searchParams.get("q");
+      if (!q || q.trim().length < 2) {
+        return err("Missing or too-short query parameter: q");
+      }
+
+      const apiKey = Deno.env.get("OPENCAGE_API_KEY");
+      if (!apiKey) {
+        return err("Geocoding not configured", 500);
+      }
+
+      try {
+        const geocodeUrl = new URL(
+          "https://api.opencagedata.com/geocode/v1/json"
+        );
+        geocodeUrl.searchParams.set("q", q.trim());
+        geocodeUrl.searchParams.set("key", apiKey);
+        geocodeUrl.searchParams.set("language", "en");
+        geocodeUrl.searchParams.set("no_annotations", "1");
+        geocodeUrl.searchParams.set("limit", "1");
+        geocodeUrl.searchParams.set("countrycode", "bw");
+
+        const controller = new AbortController();
+        const t = setTimeout(() => controller.abort(), 4000);
+
+        const res = await fetch(geocodeUrl.toString(), {
+          signal: controller.signal,
+          cache: "no-store",
+        });
+        clearTimeout(t);
+
+        if (!res.ok) {
+          return err(`OpenCage ${res.status}`, 502);
+        }
+
+        const json = (await res.json()) as {
+          results?: Array<{
+            geometry?: { lat: number; lng: number };
+            formatted?: string;
+            components?: Record<string, string>;
+          }>;
+        };
+
+        const first = json.results?.[0];
+        if (!first?.geometry) {
+          return ok({ found: false, query: q });
+        }
+
+        const c = first.components ?? {};
+        const displayName =
+          [c.city ?? c.town ?? c.village ?? c.county ?? c.state, c.country]
+            .filter(Boolean)
+            .join(", ") ||
+          first.formatted ||
+          q;
+
+        return ok({
+          found: true,
+          query: q,
+          lat: first.geometry.lat,
+          lng: first.geometry.lng,
+          display_name: displayName,
+          components: c,
+        });
+      } catch (e: any) {
+        return err(e?.message ?? "Geocode failed", 500);
+      }
+    }
+
+    // ── GET /stops ────────────────────────────────────────────────────
     if (pathname === "/stops") {
       const rows = await sql<
         {
@@ -555,7 +781,6 @@ serve(async (req: Request) => {
       return ok({ stops: result, count: result.length });
     }
 
-    // ── Fallback ─────────────────────────────────────────────────────────
     return err("Not found", 404);
   } catch (e: any) {
     return new Response(
