@@ -134,32 +134,17 @@ export type EventPayload = Record<
 
 /**
  * Log a passenger event. Fire-and-forget — no await, no throw.
- *
- * @param eventType  One of the seven supported event types.
- * @param payload    Event-specific fields. Keep it small and PII-free.
- *                   Common examples:
- *                     search_submitted  → { query, result_count }
- *                     location_selected → { name, source, position_in_results }
- *                     bus_viewed        → { trip_id, route_id }
- *                     booking_started   → { trip_id, from_stop_id, to_stop_id }
- *                     booking_submitted → { trip_id, seats, fare_bwp? }
- *                     booking_confirmed → { booking_reference, trip_id }
- *                     booking_abandoned → { trip_id, stage }
  */
 export function logEvent(
   eventType: PassengerEventType,
   payload: EventPayload = {}
 ): void {
-  // Never block the caller — dispatch to a microtask so even a synchronous
-  // fetch failure can't bubble into the caller's stack.
   if (typeof window === "undefined") return;
 
   const anonymousId = getAnonymousId();
   const sessionId   = getSessionId();
   const device      = getDevice();
 
-  // Clean the payload: drop undefined and truncate strings client-side so
-  // we don't ship junk that the server would reject anyway.
   const cleaned: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(payload)) {
     if (v === undefined) continue;
@@ -181,21 +166,18 @@ export function logEvent(
     payload:      cleaned,
   });
 
-  // Deliberately not awaited and .catch swallows — logging must never
-  // break the passenger experience.
   void fetch(EVENTS_BASE, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body,
-    keepalive: true, // allow the request to survive a navigation
+    keepalive: true,
   }).catch(() => {
     /* swallowed on purpose */
   });
 }
 
 // ---------------------------------------------------------------------------
-// Convenience wrappers — one per event type, so call sites stay readable and
-// the payload shape is documented in one place.
+// Convenience wrappers — one per event type.
 // ---------------------------------------------------------------------------
 
 export function logSearchSubmitted(query: string, resultCount: number): void {
@@ -208,11 +190,13 @@ export function logSearchSubmitted(query: string, resultCount: number): void {
 export function logLocationSelected(
   name: string,
   source: string,
+  role: "from" | "to" | string,
   positionInResults?: number
 ): void {
   logEvent("location_selected", {
     name: name.slice(0, 256),
     source,
+    role,
     position_in_results: positionInResults ?? null,
   });
 }
