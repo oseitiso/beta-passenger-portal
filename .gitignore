@@ -42,3 +42,5 @@ next-env.d.ts
 # Cloudflare / OpenNext build artifacts
 .open-next/
 .wrangler/
+
+supabase/.temp/
