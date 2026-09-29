@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import {
   X,
   Loader2,
@@ -11,22 +11,25 @@ import {
   Phone,
   User,
   ArrowRight,
+  Ban,
 } from "lucide-react";
 import {
   requestBooking,
   saveActiveBooking,
   type BookingResponse,
 } from "@/lib/passengerBookingApi";
-import type { PublicBus } from "@/lib/passengerApi";
-
-interface RouteStopOption {
-  id: string;
-  name: string;
-}
+import type { PublicBus, PublicStop } from "@/lib/passengerApi";
+import {
+  logBookingStarted,
+  logBookingSubmitted,
+  logBookingConfirmed,
+  logBookingAbandoned,
+} from "@/lib/events";
 
 interface BookingModalProps {
   bus: PublicBus;
-  routeStops: RouteStopOption[];
+  /** All route stops, with boardability flags from the API */
+  routeStops: PublicStop[];
   onClose: () => void;
   onSuccess: (response: BookingResponse) => void;
 }
@@ -35,6 +38,21 @@ type Stage = "form" | "submitting" | "success" | "error";
 
 const PHONE_PREFIX = "+267";
 const PHONE_DIGITS = 8;
+
+function reasonLabel(reason: PublicStop["unboardable_reason"]): string {
+  switch (reason) {
+    case "bus_passed":
+      return "Bus already passed";
+    case "too_close":
+      return "Bus arriving too soon";
+    case "destination":
+      return "Final stop";
+    case "off_route":
+      return "Not on route";
+    default:
+      return "Unavailable";
+  }
+}
 
 export function BookingModal({
   bus,
@@ -46,38 +64,86 @@ export function BookingModal({
   const [name, setName] = useState("");
   const [phoneLocal, setPhoneLocal] = useState("");
   const [seats, setSeats] = useState(1);
-  const [fromStopId, setFromStopId] = useState<string>(routeStops[0]?.id ?? "");
-  const [toStopId, setToStopId] = useState<string>(
-    routeStops[routeStops.length - 1]?.id ?? ""
-  );
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [result, setResult] = useState<BookingResponse | null>(null);
 
+  // Ref that flips to true the moment a booking is confirmed, so the
+  // unmount cleanup knows not to fire booking_abandoned after success.
+  const confirmedRef = useRef(false);
+  const abandonedFiredRef = useRef(false);
+
+  // Default boarding stop: the first boardable stop (API already resolves
+  // this from the passenger's search via segment_availability)
+  const defaultFromId = useMemo(() => {
+    if (bus.segment_availability?.from_stop_id) {
+      const match = routeStops.find(
+        (s) => s.stop_id === bus.segment_availability!.from_stop_id
+      );
+      if (match) return match.stop_id;
+    }
+    const firstBoardable = routeStops.find((s) => s.boardable);
+    return firstBoardable?.stop_id ?? routeStops[0]?.stop_id ?? "";
+  }, [bus.segment_availability, routeStops]);
+
+  const defaultToId = useMemo(() => {
+    if (bus.segment_availability?.to_stop_id) {
+      const match = routeStops.find(
+        (s) => s.stop_id === bus.segment_availability!.to_stop_id
+      );
+      if (match) return match.stop_id;
+    }
+    return routeStops[routeStops.length - 1]?.stop_id ?? "";
+  }, [bus.segment_availability, routeStops]);
+
+  const [fromStopId, setFromStopId] = useState<string>(defaultFromId);
+  const [toStopId, setToStopId] = useState<string>(defaultToId);
+
+  // Fire booking_started exactly once on mount, and booking_abandoned
+  // exactly once on unmount if no booking was confirmed.
+  useEffect(() => {
+    logBookingStarted(bus.trip_id, defaultFromId || null, defaultToId || null);
+    return () => {
+      if (!confirmedRef.current && !abandonedFiredRef.current) {
+        abandonedFiredRef.current = true;
+        logBookingAbandoned(bus.trip_id, "form_open");
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bus.trip_id]);
+
+  // If the parent's defaults change (e.g. segment_availability arrives late),
+  // realign if the current selections are invalid.
+  useEffect(() => {
+    const fromStop = routeStops.find((s) => s.stop_id === fromStopId);
+    if (!fromStop || !fromStop.boardable) {
+      setFromStopId(defaultFromId);
+    }
+  }, [defaultFromId, fromStopId, routeStops]);
+
   const fromStop = useMemo(
-    () => routeStops.find((s) => s.id === fromStopId),
+    () => routeStops.find((s) => s.stop_id === fromStopId),
     [routeStops, fromStopId]
   );
   const toStop = useMemo(
-    () => routeStops.find((s) => s.id === toStopId),
+    () => routeStops.find((s) => s.stop_id === toStopId),
     [routeStops, toStopId]
   );
 
-  // The list of stops the user can alight at depends on where they board.
+  // Alighting stops must come AFTER the boarding stop in route order.
+  // Everything before or at boarding is disabled.
   const alightingOptions = useMemo(() => {
-    const boardingIndex = routeStops.findIndex((s) => s.id === fromStopId);
-    if (boardingIndex === -1) return [];
-    return routeStops.slice(boardingIndex + 1);
+    const fromIndex = routeStops.findIndex((s) => s.stop_id === fromStopId);
+    if (fromIndex === -1) return [];
+    return routeStops.slice(fromIndex + 1);
   }, [routeStops, fromStopId]);
 
-  // If the user changes their boarding stop, and the current alighting stop
-  // is now before it, reset alighting to the next stop after boarding.
+  // If the current alighting stop is no longer valid, reset to the next one
   useEffect(() => {
-    if (!routeStops.length) return;
-    const boardingIndex = routeStops.findIndex((s) => s.id === fromStopId);
-    const alightingIndex = routeStops.findIndex((s) => s.id === toStopId);
-    if (alightingIndex <= boardingIndex) {
-      const next = routeStops[boardingIndex + 1];
-      if (next) setToStopId(next.id);
+    const fromIndex = routeStops.findIndex((s) => s.stop_id === fromStopId);
+    const toIndex = routeStops.findIndex((s) => s.stop_id === toStopId);
+    if (toIndex <= fromIndex) {
+      const next = routeStops[fromIndex + 1];
+      if (next) setToStopId(next.stop_id);
     }
   }, [fromStopId, toStopId, routeStops]);
 
@@ -108,8 +174,15 @@ export function BookingModal({
       setStage("error");
       return;
     }
-    const fromIndex = routeStops.findIndex((s) => s.id === fromStopId);
-    const toIndex = routeStops.findIndex((s) => s.id === toStopId);
+    if (!fromStop.boardable) {
+      setErrorMsg(
+        `Cannot board at ${fromStop.name}: ${reasonLabel(fromStop.unboardable_reason)}.`
+      );
+      setStage("error");
+      return;
+    }
+    const fromIndex = routeStops.findIndex((s) => s.stop_id === fromStopId);
+    const toIndex = routeStops.findIndex((s) => s.stop_id === toStopId);
     if (toIndex <= fromIndex) {
       setErrorMsg("Alighting stop must come after boarding stop.");
       setStage("error");
@@ -118,6 +191,8 @@ export function BookingModal({
 
     setStage("submitting");
     setErrorMsg(null);
+
+    logBookingSubmitted(bus.trip_id, seats);
 
     try {
       const response = await requestBooking({
@@ -151,6 +226,13 @@ export function BookingModal({
         });
       }
 
+      // Mark confirmed before firing the success event, so the unmount
+      // cleanup skips booking_abandoned.
+      confirmedRef.current = true;
+      if (response.booking_reference) {
+        logBookingConfirmed(response.booking_reference, bus.trip_id);
+      }
+
       setResult(response);
       setStage("success");
       onSuccess(response);
@@ -169,8 +251,9 @@ export function BookingModal({
     seats <= 10 &&
     Boolean(fromStop) &&
     Boolean(toStop) &&
-    routeStops.findIndex((s) => s.id === toStopId) >
-      routeStops.findIndex((s) => s.id === fromStopId);
+    fromStop!.boardable === true &&
+    routeStops.findIndex((s) => s.stop_id === toStopId) >
+      routeStops.findIndex((s) => s.stop_id === fromStopId);
 
   return (
     <div
@@ -225,7 +308,7 @@ export function BookingModal({
                 </div>
               </div>
 
-              {/* Journey summary (live preview of the chosen segment) */}
+              {/* Journey preview */}
               <div className="mb-4 rounded-lg border border-orange-900/40 bg-orange-950/20 p-3">
                 <div className="flex items-center gap-2 text-xs text-orange-400/80">
                   <ArrowRight className="h-3 w-3" />
@@ -253,17 +336,28 @@ export function BookingModal({
                   onChange={(e) => setFromStopId(e.target.value)}
                   className="w-full rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 focus:border-orange-600 focus:outline-none"
                 >
-                  {routeStops.map((stop, idx) => (
-                    <option
-                      key={stop.id}
-                      value={stop.id}
-                      disabled={idx === routeStops.length - 1}
-                    >
-                      {stop.name}
-                      {idx === routeStops.length - 1 ? " (final stop)" : ""}
-                    </option>
-                  ))}
+                  {routeStops.map((stop) => {
+                    const disabled = !stop.boardable;
+                    return (
+                      <option
+                        key={stop.stop_id}
+                        value={stop.stop_id}
+                        disabled={disabled}
+                      >
+                        {stop.name}
+                        {disabled
+                          ? ` — ${reasonLabel(stop.unboardable_reason)}`
+                          : ""}
+                      </option>
+                    );
+                  })}
                 </select>
+                {fromStop && !fromStop.boardable && (
+                  <div className="mt-1 flex items-center gap-1 text-xs text-amber-400">
+                    <Ban className="h-3 w-3" />
+                    {reasonLabel(fromStop.unboardable_reason)}
+                  </div>
+                )}
               </div>
 
               {/* Alighting stop */}
@@ -278,7 +372,7 @@ export function BookingModal({
                   className="w-full rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 focus:border-orange-600 focus:outline-none"
                 >
                   {alightingOptions.map((stop) => (
-                    <option key={stop.id} value={stop.id}>
+                    <option key={stop.stop_id} value={stop.stop_id}>
                       {stop.name}
                     </option>
                   ))}

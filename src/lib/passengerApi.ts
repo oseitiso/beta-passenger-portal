@@ -8,11 +8,21 @@ const API_BASE =
 export interface PublicStop {
   stop_id: string;
   name: string;
+  reverse_geocoded_name?: string | null;
   city: string | null;
   lat: number | null;
   lng: number | null;
   order: number;
   distance_from_origin_km: number | null;
+  /** True if a passenger can currently board here */
+  boardable: boolean;
+  /** Why this stop is not boardable, if applicable */
+  unboardable_reason:
+    | "bus_passed"
+    | "too_close"
+    | "destination"
+    | "off_route"
+    | null;
 }
 
 export interface PublicBus {
@@ -47,6 +57,14 @@ export interface PublicBus {
   };
 }
 
+export interface SearchedLocation {
+  name: string;
+  region: string | null;
+  lat: number;
+  lng: number;
+  source: "stop_lookup" | "forward_geocode";
+}
+
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "GET",
@@ -61,12 +79,12 @@ async function get<T>(path: string): Promise<T> {
 }
 
 export async function getActiveBuses(opts?: {
-  fromStopId?: string;
-  toStopId?: string;
+  from?: string;
+  to?: string;
 }): Promise<PublicBus[]> {
   const params = new URLSearchParams();
-  if (opts?.fromStopId) params.set("from", opts.fromStopId);
-  if (opts?.toStopId) params.set("to", opts.toStopId);
+  if (opts?.from) params.set("from", opts.from);
+  if (opts?.to) params.set("to", opts.to);
   const q = params.toString();
   const path = `/active-buses${q ? `?${q}` : ""}`;
   const data = await get<{ buses: PublicBus[]; count: number }>(path);
@@ -88,6 +106,18 @@ export async function getRoutes(): Promise<
   }[]
 > {
   return get(`/routes`);
+}
+
+export async function searchLocations(
+  query: string
+): Promise<SearchedLocation[]> {
+  const q = query.trim();
+  if (q.length < 2) return [];
+  const data = await get<{
+    locations: SearchedLocation[];
+    count: number;
+  }>(`/locations/search?q=${encodeURIComponent(q)}`);
+  return data.locations ?? [];
 }
 
 export async function getStops(): Promise<

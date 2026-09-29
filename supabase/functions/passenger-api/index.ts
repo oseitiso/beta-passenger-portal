@@ -1,16 +1,12 @@
-// B-ETA Passenger API Edge Function — v2.2
+// B-ETA Passenger API Edge Function — v2.4
 // Deploy to: hzmpncdygkeqvoszunfm
 // Public-facing API for the passenger portal. Returns ONLY public bus data.
 //
-// v1.1 — distance_remaining_km + eta_minutes per bus
-// v1.2 — GET /routes-with-polylines
-// v1.3 — stale cutoff 2 min → 5 min
-// v1.4 — boarding-stop filter
-// v1.5 — stops expose reverse_geocoded_name
-// v1.6 — GET /geocode?q= (forward geocoding proxy)
-// v2.0 — geo-spatial segment filter (is_segment_bookable)
-// v2.1 — FROM-only support (is_stop_on_route_ahead_of_bus)
-// v2.2 — GET /locations/search?q= (mixed local stops + OpenCage)
+// v2.4 — search uses lenient functions:
+//        - is_segment_searchable (two-point search, no ETA buffer)
+//        - is_stop_on_route_searchable (from-only search, no ETA buffer)
+//        Bus at origin is included in search results so passengers can see it.
+//        Booking still uses strict is_segment_bookable when the user submits.
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import postgres from "https://esm.sh/postgres@3.4.4";
@@ -31,13 +27,10 @@ const sql = postgres(SUPABASE_DB_URL, {
   connect_timeout: 15,
 });
 
-// In-memory cache for /locations/search — 24h TTL per normalized query
 const locationSearchCache = new Map<
   string,
   { data: unknown | null; ts: number }
 >();
-
-// ─── Types ──────────────────────────────────────────────────────────────
 
 interface StopShape {
   stop_id: string;
@@ -48,6 +41,13 @@ interface StopShape {
   lng: number | null;
   order: number;
   distance_from_origin_km: number | null;
+  boardable: boolean;
+  unboardable_reason:
+    | "bus_passed"
+    | "too_close"
+    | "destination"
+    | "off_route"
+    | null;
 }
 
 interface PublicTrip {
@@ -98,8 +98,6 @@ interface PublicStopFull {
   lng: number;
 }
 
-// ─── Helpers ────────────────────────────────────────────────────────────
-
 function ok(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -114,7 +112,12 @@ function err(message: string, status = 400) {
   });
 }
 
-async function loadStopsForRoute(routeId: string): Promise<StopShape[]> {
+async function loadStopsForRouteWithBoardability(
+  routeId: string,
+  busLat: number | null,
+  busLng: number | null,
+  busSpeed: number | null
+): Promise<StopShape[]> {
   const rows = await sql<
     {
       stop_id: string;
@@ -141,16 +144,82 @@ async function loadStopsForRoute(routeId: string): Promise<StopShape[]> {
     where rs.route_id = ${routeId}::uuid
     order by rs.stop_order asc
   `;
-  return rows.map((r) => ({
-    stop_id: r.stop_id,
-    name: r.name,
-    reverse_geocoded_name: r.reverse_geocoded_name,
-    city: r.city,
-    lat: r.lat,
-    lng: r.lng,
-    order: r.stop_order,
-    distance_from_origin_km: r.distance_from_origin_km,
-  }));
+
+  const routeInfo = await sql<
+    { total_km: number | null }[]
+  >`
+    select
+      case
+        when r.polyline_geom is not null then
+          ST_Length(r.polyline_geom::geography) / 1000
+        else null
+      end as total_km
+    from routes r
+    where r.id = ${routeId}::uuid
+  `;
+  const totalKm = routeInfo[0]?.total_km ?? null;
+
+  let busDistanceKm: number | null = null;
+  if (busLat != null && busLng != null && totalKm != null && totalKm > 0) {
+    try {
+      const busLocRows = await sql<
+        { frac: number }[]
+      >`
+        select ST_LineLocatePoint(
+          r.polyline_geom,
+          ST_SetSRID(ST_MakePoint(${busLng}::numeric, ${busLat}::numeric), 4326)
+        ) as frac
+        from routes r
+        where r.id = ${routeId}::uuid
+          and r.polyline_geom is not null
+      `;
+      const frac = busLocRows[0]?.frac;
+      if (frac != null) busDistanceKm = frac * totalKm;
+    } catch {
+      busDistanceKm = null;
+    }
+  }
+
+  const effectiveSpeed = busSpeed == null || busSpeed < 5 ? 60 : busSpeed;
+
+  return rows.map((r, idx) => {
+    const isLast = idx === rows.length - 1;
+    let boardable = true;
+    let unboardable_reason: StopShape["unboardable_reason"] = null;
+
+    if (r.distance_from_origin_km == null) {
+      boardable = false;
+      unboardable_reason = "off_route";
+    } else if (isLast) {
+      boardable = false;
+      unboardable_reason = "destination";
+    } else if (busDistanceKm != null) {
+      if (busDistanceKm >= r.distance_from_origin_km) {
+        boardable = false;
+        unboardable_reason = "bus_passed";
+      } else {
+        const kmAhead = r.distance_from_origin_km - busDistanceKm;
+        const eta = (kmAhead / effectiveSpeed) * 60;
+        if (eta < 5) {
+          boardable = false;
+          unboardable_reason = "too_close";
+        }
+      }
+    }
+
+    return {
+      stop_id: r.stop_id,
+      name: r.name,
+      reverse_geocoded_name: r.reverse_geocoded_name,
+      city: r.city,
+      lat: r.lat,
+      lng: r.lng,
+      order: r.stop_order,
+      distance_from_origin_km: r.distance_from_origin_km,
+      boardable,
+      unboardable_reason,
+    };
+  });
 }
 
 async function resolveLocation(
@@ -334,11 +403,12 @@ async function fetchActiveTrips(opts: {
   const stopsCache = new Map<string, StopShape[]>();
 
   for (const t of trips) {
+    // ── SEARCH filter (lenient) ──
     if (hasSegmentFilter && t.route_id) {
       try {
         const check = await sql<
           { result: unknown }[]
-        >`select public.is_segment_bookable(
+        >`select public.is_segment_searchable(
           ${t.trip_id}::uuid,
           ${fromCoord!.lat}::numeric,
           ${fromCoord!.lng}::numeric,
@@ -350,20 +420,18 @@ async function fetchActiveTrips(opts: {
         const parsed =
           typeof raw === "string"
             ? JSON.parse(raw)
-            : (raw as { bookable?: boolean; reason?: string } | null);
+            : (raw as { searchable?: boolean; reason?: string } | null);
 
-        if (!parsed || parsed.bookable !== true) {
-          continue;
-        }
+        if (!parsed || parsed.searchable !== true) continue;
       } catch (e) {
-        console.error("[fetchActiveTrips] segment check error:", e);
+        console.error("[fetchActiveTrips] segment search error:", e);
         continue;
       }
     } else if (hasFromFilter && t.route_id) {
       try {
         const check = await sql<
           { result: unknown }[]
-        >`select public.is_stop_on_route_ahead_of_bus(
+        >`select public.is_stop_on_route_searchable(
           ${t.trip_id}::uuid,
           ${fromCoord!.lat}::numeric,
           ${fromCoord!.lng}::numeric
@@ -373,13 +441,11 @@ async function fetchActiveTrips(opts: {
         const parsed =
           typeof raw === "string"
             ? JSON.parse(raw)
-            : (raw as { passable?: boolean; reason?: string } | null);
+            : (raw as { searchable?: boolean; reason?: string } | null);
 
-        if (!parsed || parsed.passable !== true) {
-          continue;
-        }
+        if (!parsed || parsed.searchable !== true) continue;
       } catch (e) {
-        console.error("[fetchActiveTrips] from-only check error:", e);
+        console.error("[fetchActiveTrips] from-only search error:", e);
         continue;
       }
     }
@@ -389,7 +455,12 @@ async function fetchActiveTrips(opts: {
       if (stopsCache.has(t.route_id)) {
         stops = stopsCache.get(t.route_id)!;
       } else {
-        stops = await loadStopsForRoute(t.route_id);
+        stops = await loadStopsForRouteWithBoardability(
+          t.route_id,
+          t.lat,
+          t.lng,
+          t.speed_kph
+        );
         stopsCache.set(t.route_id, stops);
       }
     }
@@ -474,8 +545,6 @@ async function fetchActiveTrips(opts: {
   return out;
 }
 
-// ─── Server ─────────────────────────────────────────────────────────────
-
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -492,15 +561,13 @@ serve(async (req: Request) => {
   if (!pathname.startsWith("/")) pathname = "/" + pathname;
 
   try {
-    // ── GET /health ───────────────────────────────────────────────────
     if (pathname === "/health" || pathname === "/") {
       return ok({
         status: "B-ETA Passenger API active",
-        version: "2.2.0",
+        version: "2.4.0",
       });
     }
 
-    // ── GET /active-buses ─────────────────────────────────────────────
     if (pathname === "/active-buses") {
       const fromStr = url.searchParams.get("from") ?? undefined;
       const toStr = url.searchParams.get("to") ?? undefined;
@@ -520,7 +587,6 @@ serve(async (req: Request) => {
       return ok({ buses, count: buses.length });
     }
 
-    // ── GET /buses/:trip_id ───────────────────────────────────────────
     const busMatch = pathname.match(/^\/buses\/([^/]+)$/);
     if (busMatch) {
       const tripId = busMatch[1];
@@ -600,7 +666,14 @@ serve(async (req: Request) => {
       }
 
       const t = rows[0];
-      const stops = t.route_id ? await loadStopsForRoute(t.route_id) : [];
+      const stops = t.route_id
+        ? await loadStopsForRouteWithBoardability(
+            t.route_id,
+            t.lat,
+            t.lng,
+            t.speed_kph
+          )
+        : [];
 
       const trip: PublicTrip = {
         trip_id: t.trip_id,
@@ -637,7 +710,6 @@ serve(async (req: Request) => {
       return ok(trip);
     }
 
-    // ── GET /routes-with-polylines ────────────────────────────────────
     if (pathname === "/routes-with-polylines") {
       const rows = await sql<
         {
@@ -681,7 +753,6 @@ serve(async (req: Request) => {
       return ok({ routes: result, count: result.length });
     }
 
-    // ── GET /routes ───────────────────────────────────────────────────
     if (pathname === "/routes") {
       const rows = await sql<
         {
@@ -701,7 +772,6 @@ serve(async (req: Request) => {
       return ok(rows);
     }
 
-    // ── GET /geocode?q=Nata,Botswana ──────────────────────────────────
     if (pathname === "/geocode") {
       const q = url.searchParams.get("q");
       if (!q || q.trim().length < 2) {
@@ -771,9 +841,6 @@ serve(async (req: Request) => {
       }
     }
 
-    // ── GET /locations/search?q=Mosetse ───────────────────────────────
-    // Mixed search: local stops first, then OpenCage forward geocode.
-    // Cached in-memory for 24h per normalized query.
     if (pathname === "/locations/search") {
       const q = url.searchParams.get("q");
       if (!q || q.trim().length < 2) {
@@ -789,7 +856,6 @@ serve(async (req: Request) => {
       }
 
       try {
-        // 1. Local stop lookup
         const stopRows = await sql<
           {
             id: string;
@@ -825,7 +891,6 @@ serve(async (req: Request) => {
           source: "stop_lookup" as const,
         }));
 
-        // 2. OpenCage fallback
         let geocodeResults: Array<{
           name: string;
           region: string | null;
@@ -900,7 +965,6 @@ serve(async (req: Request) => {
           }
         }
 
-        // Merge + dedupe by lowercase name, prefer local stops
         const seen = new Set<string>();
         const merged = [...stopResults, ...geocodeResults].filter((loc) => {
           const key = loc.name.toLowerCase();
@@ -918,7 +982,6 @@ serve(async (req: Request) => {
       }
     }
 
-    // ── GET /stops ────────────────────────────────────────────────────
     if (pathname === "/stops") {
       const rows = await sql<
         {
