@@ -8,7 +8,7 @@ const ANON_KEY =
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??
   "sb_publishable_o2CPNKg49wAwJysjiGp08A_V0ZYeZjH";
 
-// ─── Types ──────────────────────────────────────────────────────────────
+// ───────────────────────── Types ─────────────────────────
 
 export interface BookingRequest {
   trip_id: string;
@@ -50,6 +50,7 @@ export interface BookingDetail {
   picked_up_at: string | null;
   pickup_id: string | null;
   pickup_status: string | null;
+  pickup_missed_reason: string | null;
   driver_id: string | null;
   trip_code: string | null;
   trip_status: string | null;
@@ -58,10 +59,30 @@ export interface BookingDetail {
   route_destination: string | null;
 }
 
-// ─── Anonymous ID management ────────────────────────────────────────────
+/**
+ * Rolling record of a completed/ended booking. Kept in localStorage as a
+ * paper trail so passengers can see evidence of past trips even after the
+ * active booking slot has been cleared.
+ */
+export interface BookingHistoryEntry {
+  handoff_id: string;
+  booking_reference: string;
+  handoff_status: string;
+  from_stop_name: string | null;
+  to_stop_name: string | null;
+  route_origin: string | null;
+  route_destination: string | null;
+  requested_seats: number;
+  passenger_name: string | null;
+  ended_at: number;
+}
+
+// ───────────────────────── Anonymous ID management ─────────────────────────
 
 const ANON_ID_KEY = "b-eta-anonymous-id";
 const BOOKING_STORAGE_KEY = "b-eta-active-booking";
+const HISTORY_KEY = "b-eta-booking-history";
+const MAX_HISTORY = 20;
 
 export function getOrCreateAnonymousId(): string {
   if (typeof window === "undefined") return "";
@@ -109,7 +130,46 @@ export function clearActiveBooking(): void {
   localStorage.removeItem(BOOKING_STORAGE_KEY);
 }
 
-// ─── HTTP ───────────────────────────────────────────────────────────────
+// ───────────────────────── Booking history (paper trail) ─────────────────────────
+
+/**
+ * Upsert an ended booking into the rolling history log.
+ * Newest first, capped at MAX_HISTORY entries.
+ */
+export function appendBookingHistory(entry: BookingHistoryEntry): void {
+  if (typeof window === "undefined") return;
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    const list: BookingHistoryEntry[] = raw ? JSON.parse(raw) : [];
+
+    // De-dupe by handoff_id (upsert — most recent wins)
+    const filtered = list.filter((e) => e.handoff_id !== entry.handoff_id);
+    filtered.unshift(entry);
+
+    const trimmed = filtered.slice(0, MAX_HISTORY);
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(trimmed));
+  } catch {
+    // Storage full, private mode, or corrupted JSON — silently ignore.
+    // History is a nice-to-have; never break the main flow for it.
+  }
+}
+
+export function getBookingHistory(): BookingHistoryEntry[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function clearBookingHistory(): void {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem(HISTORY_KEY);
+}
+
+// ───────────────────────── HTTP ─────────────────────────
 
 async function post<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
@@ -147,7 +207,7 @@ async function get<T>(path: string): Promise<T> {
   }
 }
 
-// ─── Public methods ─────────────────────────────────────────────────────
+// ───────────────────────── Public methods ─────────────────────────
 
 export async function requestBooking(
   req: Omit<BookingRequest, "anonymous_id">

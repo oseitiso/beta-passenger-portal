@@ -34,6 +34,7 @@ import {
   getBookingStatus,
   cancelBooking,
   clearActiveBooking,
+  appendBookingHistory,
   type BookingDetail,
 } from "@/lib/passengerBookingApi";
 import {
@@ -69,6 +70,7 @@ const locationSearchCache = new Map<string, SearchedLocation[]>();
 const SEARCH_DEBOUNCE_MS = 300;
 const FILTER_DEBOUNCE_MS = 400;
 const REALTIME_THROTTLE_MS = 3000;
+const ENDED_BOOKING_LINGER_MS = 30_000;
 
 function findNearestLocation(
   lat: number,
@@ -375,6 +377,8 @@ export default function MapPage() {
   const [activeBooking, setActiveBooking] = useState<BookingDetail | null>(
     null
   );
+  const [recentlyEndedBooking, setRecentlyEndedBooking] =
+    useState<BookingDetail | null>(null);
   const [filterMode, setFilterMode] = useState<FilterMode>("dim");
   const [filterHovered, setFilterHovered] = useState(false);
   const [, setTick] = useState(0);
@@ -432,8 +436,41 @@ export default function MapPage() {
           "COMPLETED",
         ];
         if (terminalStatuses.includes(result.booking.handoff_status)) {
-          clearActiveBooking();
-          setActiveBooking(null);
+          // ── Paper trail: log to history BEFORE clearing ──
+          appendBookingHistory({
+            handoff_id: result.booking.handoff_id,
+            booking_reference: result.booking.booking_reference,
+            handoff_status: result.booking.handoff_status,
+            from_stop_name: result.booking.from_stop_name ?? null,
+            to_stop_name: result.booking.to_stop_name ?? null,
+            route_origin: result.booking.route_origin ?? null,
+            route_destination: result.booking.route_destination ?? null,
+            requested_seats: result.booking.requested_seats,
+            passenger_name: result.booking.passenger_name ?? null,
+            ended_at: Date.now(),
+          });
+
+          // ── Show an explainer banner for graceful endings ──
+          // COMPLETED / EXPIRED linger in the receipt slot for a short
+          // window so the passenger sees WHY the booking ended.
+          // Hard-terminal states (CANCELLED / DECLINED / NO_SHOW) clear
+          // the active slot immediately but still surface the ended banner.
+          const isGracefulEnd =
+            result.booking.handoff_status === "COMPLETED" ||
+            result.booking.handoff_status === "EXPIRED";
+
+          setRecentlyEndedBooking(result.booking);
+
+          if (isGracefulEnd) {
+            setActiveBooking(result.booking);
+            setTimeout(() => {
+              clearActiveBooking();
+              setActiveBooking(null);
+            }, ENDED_BOOKING_LINGER_MS);
+          } else {
+            clearActiveBooking();
+            setActiveBooking(null);
+          }
         } else {
           setActiveBooking(result.booking);
         }
@@ -585,6 +622,7 @@ export default function MapPage() {
               buses={buses}
               selectedBusId={null}
               activeBooking={activeBooking}
+              recentlyEndedBooking={recentlyEndedBooking}
               onSelectBus={handleSelectBus}
               onCancelBooking={handleCancelActiveBooking}
               loading={loading}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Bus,
   Gauge,
@@ -11,14 +11,23 @@ import {
   X,
   Loader2,
   Clock,
+  MapPinOff,
+  CheckCircle2,
+  History,
+  AlertCircle,
 } from "lucide-react";
 import type { PublicBus } from "@/lib/passengerApi";
-import type { BookingDetail } from "@/lib/passengerBookingApi";
+import type {
+  BookingDetail,
+  BookingHistoryEntry,
+} from "@/lib/passengerBookingApi";
+import { getBookingHistory } from "@/lib/passengerBookingApi";
 
 interface BusListProps {
   buses: PublicBus[];
   selectedBusId: string | null;
   activeBooking: BookingDetail | null;
+  recentlyEndedBooking?: BookingDetail | null;
   onSelectBus: (bus: PublicBus) => void;
   onCancelBooking: (handoffId: string) => Promise<void>;
   loading: boolean;
@@ -43,6 +52,17 @@ function formatCountdown(expiresAt: string): string {
   return `${mins}:${String(secs).padStart(2, "0")}`;
 }
 
+function formatRelativeTime(ms: number): string {
+  const seconds = Math.floor((Date.now() - ms) / 1000);
+  if (seconds < 60) return "just now";
+  const mins = Math.floor(seconds / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
 function statusLabel(status: string): { label: string; colorClass: string } {
   switch (status) {
     case "PENDING":
@@ -51,22 +71,50 @@ function statusLabel(status: string): { label: string; colorClass: string } {
       return { label: "Driver confirmed", colorClass: "text-green-300" };
     case "PICKED_UP":
       return { label: "On board", colorClass: "text-green-200" };
+    case "MISSED":
+      return { label: "Missed", colorClass: "text-amber-300" };
+    case "CANCELLED":
+      return { label: "Cancelled", colorClass: "text-red-300" };
+    case "COMPLETED":
+      return { label: "Completed", colorClass: "text-neutral-300" };
+    case "EXPIRED":
+      return { label: "Expired", colorClass: "text-neutral-400" };
+    case "NO_SHOW":
+      return { label: "No-show", colorClass: "text-amber-400" };
+    case "DECLINED":
+      return { label: "Declined", colorClass: "text-red-400" };
     default:
       return { label: status, colorClass: "text-neutral-300" };
   }
+}
+
+function findBookingBus(
+  buses: PublicBus[],
+  activeBooking: BookingDetail | null
+): PublicBus | null {
+  if (!activeBooking) return null;
+  return (
+    buses.find(
+      (bus) =>
+        bus.trip_code === activeBooking.trip_code ||
+        (activeBooking as any).trip_id === bus.trip_id
+    ) ?? null
+  );
 }
 
 export function BusList({
   buses,
   selectedBusId,
   activeBooking,
+  recentlyEndedBooking,
   onSelectBus,
   onCancelBooking,
   loading,
 }: BusListProps) {
-  const [expandedTripId, setExpandedTripId] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [history, setHistory] = useState<BookingHistoryEntry[]>([]);
 
   const sorted = [...buses].sort((a, b) => {
     const pa = a.vehicle?.registration_plate ?? "";
@@ -74,7 +122,30 @@ export function BusList({
     return pa.localeCompare(pb);
   });
 
-  if (loading && buses.length === 0) {
+  const bookingBus = findBookingBus(buses, activeBooking);
+
+  // Load history lazily when the panel opens (avoids reading localStorage
+  // on every render and keeps SSR-safe).
+  useEffect(() => {
+    if (historyOpen) {
+      setHistory(getBookingHistory());
+    }
+  }, [historyOpen]);
+
+  const handleCancel = async (handoffId: string) => {
+    if (!confirm("Cancel this booking request?")) return;
+    setCancelling(true);
+    setCancelError(null);
+    try {
+      await onCancelBooking(handoffId);
+    } catch (e) {
+      setCancelError(e instanceof Error ? e.message : "Failed to cancel");
+    } finally {
+      setCancelling(false);
+    }
+  };
+
+  if (loading && buses.length === 0 && !activeBooking && !recentlyEndedBooking) {
     return (
       <div className="flex h-full items-center justify-center p-6 text-sm text-neutral-500">
         Loading buses…
@@ -82,7 +153,12 @@ export function BusList({
     );
   }
 
-  if (buses.length === 0) {
+  if (
+    buses.length === 0 &&
+    !activeBooking &&
+    !recentlyEndedBooking &&
+    history.length === 0
+  ) {
     return (
       <div className="flex h-full flex-col items-center justify-center p-6 text-center">
         <Bus className="mb-2 h-8 w-8 text-neutral-600" />
@@ -96,261 +172,450 @@ export function BusList({
     );
   }
 
-  const handleCancel = async (handoffId: string) => {
-    if (!confirm("Cancel this booking request?")) return;
-    setCancelling(true);
-    setCancelError(null);
-    try {
-      await onCancelBooking(handoffId);
-      setExpandedTripId(null);
-    } catch (e) {
-      setCancelError(e instanceof Error ? e.message : "Failed to cancel");
-    } finally {
-      setCancelling(false);
-    }
-  };
-
   return (
     <div className="flex h-full flex-col">
+      {activeBooking && (
+        <BookingReceipt
+          booking={activeBooking}
+          liveBus={bookingBus}
+          cancelling={cancelling}
+          cancelError={cancelError}
+          onCancel={handleCancel}
+        />
+      )}
+
+      {!activeBooking && recentlyEndedBooking && (
+        <EndedBanner booking={recentlyEndedBooking} />
+      )}
+
       <div className="flex-shrink-0 border-b border-neutral-800 px-4 py-2 text-xs font-medium text-neutral-500">
         {buses.length} {buses.length === 1 ? "bus" : "buses"} active
       </div>
 
-      <ul className="flex-1 divide-y divide-neutral-800 overflow-y-auto">
-        {sorted.map((bus) => {
-          const isSelected = bus.trip_id === selectedBusId;
-          const speed = Math.round(bus.live?.speed_kph ?? 0);
-          const passengers = bus.vehicle?.passenger_count ?? 0;
-          const capacity = bus.vehicle?.capacity;
-          const plate = bus.vehicle?.registration_plate ?? "Unknown";
-          const origin = bus.route?.origin ?? "—";
-          const destination = bus.route?.destination ?? "—";
-          const tripCode = bus.trip_code ?? bus.trip_id.slice(0, 8);
-          const lastSeen = timeSince(bus.live?.last_position_at);
+      {buses.length === 0 ? (
+        <div className="flex flex-1 flex-col items-center justify-center p-6 text-center">
+          <Bus className="mb-2 h-8 w-8 text-neutral-600" />
+          <p className="text-sm font-medium text-neutral-400">
+            No other buses on the road
+          </p>
+          {(activeBooking || recentlyEndedBooking) && (
+            <p className="mt-1 text-xs text-neutral-600">
+              {activeBooking
+                ? "Your booking is still active — see receipt above"
+                : "Your recent trip is shown above"}
+            </p>
+          )}
+        </div>
+      ) : (
+        <ul className="flex-1 divide-y divide-neutral-800 overflow-y-auto">
+          {sorted.map((bus) => {
+            const isSelected = bus.trip_id === selectedBusId;
+            const speed = Math.round(bus.live?.speed_kph ?? 0);
+            const passengers = bus.vehicle?.passenger_count ?? 0;
+            const capacity = bus.vehicle?.capacity;
+            const plate = bus.vehicle?.registration_plate ?? "Unknown";
+            const origin = bus.route?.origin ?? "—";
+            const destination = bus.route?.destination ?? "—";
+            const tripCode = bus.trip_code ?? bus.trip_id.slice(0, 8);
+            const lastSeen = timeSince(bus.live?.last_position_at);
+            const isBookingBus = bus.trip_id === bookingBus?.trip_id;
 
-          // Match active booking to this bus by trip_code (fallback to trip_id)
-          const isBookingHere =
-            activeBooking !== null &&
-            (activeBooking.trip_code === tripCode ||
-              (activeBooking as any).trip_id === bus.trip_id);
-
-          const isExpanded = expandedTripId === bus.trip_id;
-
-          const handleCardClick = () => {
-            if (isBookingHere && activeBooking) {
-              setExpandedTripId(isExpanded ? null : bus.trip_id);
-            } else {
-              onSelectBus(bus);
-            }
-          };
-
-          return (
-            <li key={bus.trip_id}>
-              <div
-                className={`transition-colors ${
-                  isSelected
-                    ? "bg-orange-600/10 border-l-2 border-orange-600"
-                    : "border-l-2 border-transparent"
-                }`}
-              >
-                <button
-                  onClick={handleCardClick}
-                  className="w-full px-4 py-3 text-left transition-colors hover:bg-neutral-900"
+            return (
+              <li key={bus.trip_id}>
+                <div
+                  className={`transition-colors ${
+                    isSelected
+                      ? "bg-orange-600/10 border-l-2 border-orange-600"
+                      : "border-l-2 border-transparent"
+                  }`}
                 >
-                  <div className="flex items-center gap-2">
-                    <div
-                      className={`flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md ${
-                        isBookingHere
-                          ? "bg-orange-600 text-white"
-                          : "bg-orange-600/20 text-orange-500"
-                      }`}
-                    >
-                      <Bus className="h-3.5 w-3.5" />
-                    </div>
-                    <span className="min-w-0 flex-1 truncate text-sm font-semibold text-neutral-100">
-                      {plate}
-                    </span>
-                    {isBookingHere && activeBooking && (
-                      <span className="flex flex-shrink-0 items-center gap-1 rounded-full bg-orange-600 px-2 py-0.5 text-[10px] font-bold text-white">
-                        <Clock className="h-2.5 w-2.5" />
-                        {activeBooking.handoff_status === "PENDING"
-                          ? formatCountdown(activeBooking.expires_at)
-                          : activeBooking.handoff_status === "ACCEPTED"
-                          ? "PIN"
-                          : "Booked"}
+                  <button
+                    onClick={() => onSelectBus(bus)}
+                    className="w-full px-4 py-3 text-left transition-colors hover:bg-neutral-900"
+                  >
+                    <div className="flex items-center gap-2">
+                      <div
+                        className={`flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md ${
+                          isBookingBus
+                            ? "bg-orange-600 text-white"
+                            : "bg-orange-600/20 text-orange-500"
+                        }`}
+                      >
+                        <Bus className="h-3.5 w-3.5" />
+                      </div>
+                      <span className="min-w-0 flex-1 truncate text-sm font-semibold text-neutral-100">
+                        {plate}
                       </span>
-                    )}
-                    <span className="flex flex-shrink-0 items-center gap-1 text-xs text-neutral-400">
-                      <Gauge className="h-3 w-3" />
-                      {speed}
-                    </span>
-                    <span className="flex-shrink-0 text-[10px] text-neutral-500">
-                      {lastSeen}
-                    </span>
-                  </div>
-
-                  {/* Show booked segment if this bus is your booking, otherwise show full route */}
-                  {isBookingHere && activeBooking ? (
-                    <div className="mt-1.5 truncate text-xs text-orange-300">
-                      {activeBooking.from_stop_name ??
-                        activeBooking.route_origin ??
-                        "—"}{" "}
-                      <span className="text-neutral-600">→</span>{" "}
-                      {activeBooking.to_stop_name ??
-                        activeBooking.route_destination ??
-                        "—"}
+                      <span className="flex flex-shrink-0 items-center gap-1 text-xs text-neutral-400">
+                        <Gauge className="h-3 w-3" />
+                        {speed}
+                      </span>
+                      <span className="flex-shrink-0 text-[10px] text-neutral-500">
+                        {lastSeen}
+                      </span>
                     </div>
-                  ) : (
+
                     <div className="mt-1.5 truncate text-xs text-neutral-300">
                       {origin} <span className="text-neutral-600">→</span>{" "}
                       {destination}
                     </div>
-                  )}
 
-                  <div className="mt-1.5 flex items-center gap-3 text-xs text-neutral-500">
-                    <span className="flex items-center gap-1">
-                      <Users className="h-3 w-3" />
-                      {passengers}
-                      {capacity ? `/${capacity}` : ""}
-                    </span>
-                    <span className="truncate font-mono text-[10px] tracking-tight">
-                      {tripCode}
-                    </span>
-                    {isBookingHere && (
-                      <span className="ml-auto flex items-center gap-1 text-orange-400">
-                        {isExpanded ? (
-                          <>
-                            <ChevronUp className="h-3 w-3" /> Hide
-                          </>
-                        ) : (
-                          <>
-                            <ChevronDown className="h-3 w-3" /> Details
-                          </>
-                        )}
+                    <div className="mt-1.5 flex items-center gap-3 text-xs text-neutral-500">
+                      <span className="flex items-center gap-1">
+                        <Users className="h-3 w-3" />
+                        {passengers}
+                        {capacity ? `/${capacity}` : ""}
                       </span>
-                    )}
-                  </div>
-                </button>
+                      <span className="truncate font-mono text-[10px] tracking-tight">
+                        {tripCode}
+                      </span>
+                    </div>
+                  </button>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
 
-                {isBookingHere && isExpanded && activeBooking && (
-                  <BookingExpandedCard
-                    booking={activeBooking}
-                    cancelling={cancelling}
-                    cancelError={cancelError}
-                    onCancel={handleCancel}
-                  />
-                )}
+      {/* Recent trips — paper trail of ended bookings */}
+      <div className="flex-shrink-0 border-t border-neutral-800">
+        <button
+          onClick={() => setHistoryOpen((v) => !v)}
+          className="flex w-full items-center gap-2 px-4 py-2 text-left text-xs text-neutral-500 transition-colors hover:bg-neutral-900"
+        >
+          <History className="h-3 w-3" />
+          <span className="flex-1">Recent trips</span>
+          {historyOpen ? (
+            <ChevronUp className="h-3 w-3" />
+          ) : (
+            <ChevronDown className="h-3 w-3" />
+          )}
+        </button>
+
+        {historyOpen && (
+          <div className="max-h-64 overflow-y-auto border-t border-neutral-800 bg-neutral-950/50">
+            {history.length === 0 ? (
+              <div className="px-4 py-3 text-xs text-neutral-600">
+                No past trips yet
               </div>
-            </li>
-          );
-        })}
-      </ul>
+            ) : (
+              <ul className="divide-y divide-neutral-800/60">
+                {history.map((entry) => {
+                  const st = statusLabel(entry.handoff_status);
+                  const from = entry.from_stop_name ?? entry.route_origin ?? "—";
+                  const to =
+                    entry.to_stop_name ?? entry.route_destination ?? "—";
+                  return (
+                    <li key={entry.handoff_id} className="px-4 py-2 text-xs">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`text-[10px] font-semibold uppercase ${st.colorClass}`}
+                        >
+                          {st.label}
+                        </span>
+                        <span className="ml-auto text-[10px] text-neutral-600">
+                          {formatRelativeTime(entry.ended_at)}
+                        </span>
+                      </div>
+                      <div className="mt-1 truncate font-mono text-[10px] text-neutral-500">
+                        {entry.booking_reference}
+                      </div>
+                      <div className="mt-0.5 truncate text-neutral-300">
+                        {from} <span className="text-neutral-600">→</span> {to}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
 
-function BookingExpandedCard({
+/**
+ * Banner shown when the most recent booking ended and there's no live
+ * active booking. Explains the outcome instead of silently vanishing.
+ *
+ * Rendered in place of BookingReceipt when activeBooking is null but
+ * recentlyEndedBooking is set (e.g. after a CANCELLED or DECLINED).
+ */
+function EndedBanner({ booking }: { booking: BookingDetail }) {
+  const st = statusLabel(booking.handoff_status);
+  const destination =
+    booking.to_stop_name ??
+    booking.route_destination ??
+    booking.route_name ??
+    "your destination";
+
+  const message = (() => {
+    switch (booking.handoff_status) {
+      case "COMPLETED":
+        return `Trip completed — you arrived at ${destination}`;
+      case "EXPIRED":
+        return "Booking expired before the driver accepted it";
+      case "CANCELLED":
+        return "This booking was cancelled";
+      case "NO_SHOW":
+        return "Marked as no-show — the driver didn't find you";
+      case "DECLINED":
+        return "Driver declined this request";
+      default:
+        return "This booking has ended";
+    }
+  })();
+
+  return (
+    <div className="flex-shrink-0 border-b border-neutral-800 bg-neutral-900/50 px-4 py-3">
+      <div className="flex items-start gap-2">
+        <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-400" />
+        <div className="min-w-0 flex-1">
+          <div className={`text-xs font-semibold ${st.colorClass}`}>
+            {st.label}
+          </div>
+          <div className="mt-0.5 text-xs text-neutral-400">{message}</div>
+          <div className="mt-1 font-mono text-[10px] text-neutral-600">
+            {booking.booking_reference}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Pinned receipt for the passenger's active booking.
+ * Persists independently of bus list. Live bus context degrades gracefully.
+ *
+ * PIN visibility rule: only shown during ACCEPTED (driver confirmed but not
+ * yet boarded). Once PICKED_UP, the PIN is considered consumed and retired.
+ * A confirmation panel appears instead, swapping its message after 5s from
+ * "PIN verified — enjoy your trip" to "You are now boarded to [destination]".
+ */
+function BookingReceipt({
   booking,
+  liveBus,
   cancelling,
   cancelError,
   onCancel,
 }: {
   booking: BookingDetail;
+  liveBus: PublicBus | null;
   cancelling: boolean;
   cancelError: string | null;
   onCancel: (handoffId: string) => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  const [boardedMessageSwapped, setBoardedMessageSwapped] = useState(false);
+
   const statusInfo = statusLabel(booking.handoff_status);
+
+  // PIN is only live between driver confirmation and boarding.
   const showPin =
-    booking.booking_pin &&
-    (booking.handoff_status === "ACCEPTED" ||
-      booking.handoff_status === "PICKED_UP");
+    booking.booking_pin && booking.handoff_status === "ACCEPTED";
 
   const canCancel =
     booking.handoff_status === "PENDING" ||
     booking.handoff_status === "ACCEPTED";
 
+  const plate = liveBus?.vehicle?.registration_plate ?? null;
+  const speed = liveBus ? Math.round(liveBus.live?.speed_kph ?? 0) : null;
+  const lastSeen = liveBus ? timeSince(liveBus.live?.last_position_at) : null;
+
+  // Resolve the actual booked destination with sensible fallbacks.
+  const destination =
+    booking.to_stop_name ??
+    booking.route_destination ??
+    booking.route_name ??
+    "your destination";
+
+  const isBoarded = booking.handoff_status === "PICKED_UP";
+
+  // Swap the "PIN verified" message for the destination message after 5s.
+  useEffect(() => {
+    if (!isBoarded) {
+      setBoardedMessageSwapped(false);
+      return;
+    }
+    const t = setTimeout(() => setBoardedMessageSwapped(true), 5000);
+    return () => clearTimeout(t);
+  }, [isBoarded]);
+
   return (
-    <div className="border-t border-neutral-800 bg-neutral-900/40 px-4 py-3">
-      <div className="mb-3 flex items-center gap-2 text-xs">
-        <span className={`font-semibold ${statusInfo.colorClass}`}>
-          {statusInfo.label}
-        </span>
-        {booking.handoff_status === "PENDING" && (
-          <span className="text-neutral-500">
-            · Expires in {formatCountdown(booking.expires_at)}
+    <div className="flex-shrink-0 border-b border-neutral-800 bg-neutral-950">
+      {/* Compact header row — always visible */}
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="w-full px-4 py-3 text-left transition-colors hover:bg-neutral-900"
+      >
+        <div className="flex items-center gap-2">
+          <span className="rounded-full bg-orange-600 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white">
+            Your booking
           </span>
-        )}
-      </div>
+          <span className={`text-xs font-semibold ${statusInfo.colorClass}`}>
+            {statusInfo.label}
+          </span>
+          {booking.handoff_status === "PENDING" && (
+            <span className="ml-auto flex items-center gap-1 text-[10px] text-neutral-500">
+              <Clock className="h-2.5 w-2.5" />
+              {formatCountdown(booking.expires_at)}
+            </span>
+          )}
+          <span
+            className={`${
+              booking.handoff_status === "PENDING" ? "" : "ml-auto"
+            } flex items-center gap-1 text-orange-400`}
+          >
+            {expanded ? (
+              <>
+                <ChevronUp className="h-3 w-3" /> Hide
+              </>
+            ) : (
+              <>
+                <ChevronDown className="h-3 w-3" /> Details
+              </>
+            )}
+          </span>
+        </div>
 
-      <div className="mb-3">
-        <div className="text-[10px] uppercase tracking-wider text-neutral-500">
-          Booking reference
+        <div className="mt-2">
+          <div className="text-[10px] uppercase tracking-wider text-neutral-500">
+            Booking reference
+          </div>
+          <div className="mt-0.5 font-mono text-sm font-bold text-neutral-100">
+            {booking.booking_reference}
+          </div>
         </div>
-        <div className="mt-0.5 font-mono text-sm font-bold text-neutral-100">
-          {booking.booking_reference}
-        </div>
-      </div>
 
-      {showPin && (
-        <div className="mb-3 rounded-lg border border-orange-700/40 bg-neutral-950/50 p-3">
-          <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-orange-400">
-            <KeyRound className="h-3 w-3" />
-            Show this PIN to the driver
-          </div>
-          <div className="mt-1 font-mono text-2xl font-bold tracking-widest text-orange-300">
-            {booking.booking_pin}
-          </div>
-        </div>
-      )}
-
-      <div className="mb-3 grid grid-cols-2 gap-2 text-xs">
-        <div>
-          <div className="text-[10px] uppercase text-neutral-500">From</div>
-          <div className="text-neutral-200">
-            {booking.from_stop_name ?? booking.route_origin ?? "—"}
-          </div>
-        </div>
-        <div>
-          <div className="text-[10px] uppercase text-neutral-500">To</div>
-          <div className="text-neutral-200">
-            {booking.to_stop_name ?? booking.route_destination ?? "—"}
-          </div>
-        </div>
-        <div>
-          <div className="text-[10px] uppercase text-neutral-500">Seats</div>
-          <div className="text-neutral-200">{booking.requested_seats}</div>
-        </div>
-        <div>
-          <div className="text-[10px] uppercase text-neutral-500">Name</div>
-          <div className="truncate text-neutral-200">
-            {booking.passenger_name ?? "—"}
-          </div>
-        </div>
-      </div>
-
-      {canCancel && (
-        <button
-          onClick={() => onCancel(booking.handoff_id)}
-          disabled={cancelling}
-          className="flex w-full items-center justify-center gap-2 rounded-lg border border-red-800 bg-red-950/40 px-3 py-2 text-xs font-medium text-red-300 transition-colors hover:bg-red-950/60 disabled:opacity-50"
-        >
-          {cancelling ? (
+        {/* Live bus / status row — always visible for quick context */}
+        <div className="mt-2 flex items-center gap-2 text-xs">
+          {liveBus ? (
             <>
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              Cancelling…
+              <Bus className="h-3.5 w-3.5 flex-shrink-0 text-orange-500" />
+              <span className="min-w-0 flex-1 truncate font-medium text-neutral-200">
+                {plate ?? "Your bus"}
+              </span>
+              <span className="flex items-center gap-1 text-neutral-400">
+                <Gauge className="h-3 w-3" />
+                {speed}
+              </span>
+              <span className="text-[10px] text-neutral-500">{lastSeen}</span>
+            </>
+          ) : booking.handoff_status === "PICKED_UP" ? (
+            <>
+              <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0 text-green-300" />
+              <span className="text-green-300">
+                On board — you'll be dropped at {destination}
+              </span>
+            </>
+          ) : booking.handoff_status === "MISSED" ? (
+            <>
+              <MapPinOff className="h-3.5 w-3.5 flex-shrink-0 text-amber-300" />
+              <span className="text-amber-300">
+                Driver didn't arrive
+                {booking.pickup_missed_reason
+                  ? ` — ${booking.pickup_missed_reason}`
+                  : ""}
+              </span>
             </>
           ) : (
             <>
-              <X className="h-3.5 w-3.5" />
-              Cancel booking
+              <MapPinOff className="h-3.5 w-3.5 flex-shrink-0 text-neutral-500" />
+              <span className="text-neutral-500">
+                Bus location unavailable
+              </span>
             </>
           )}
-        </button>
-      )}
+        </div>
+      </button>
 
-      {cancelError && (
-        <div className="mt-2 text-[10px] text-red-400">{cancelError}</div>
+      {/* Expandable detail section — PIN retired after PICKED_UP */}
+      {expanded && (
+        <div className="border-t border-neutral-800 px-4 py-3">
+          {showPin && (
+            <div className="mb-3 rounded-lg border border-orange-700/40 bg-neutral-900/50 p-3">
+              <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-orange-400">
+                <KeyRound className="h-3 w-3" />
+                Show this PIN to the driver
+              </div>
+              <div className="mt-1 font-mono text-2xl font-bold tracking-widest text-orange-300">
+                {booking.booking_pin}
+              </div>
+            </div>
+          )}
+
+          {isBoarded && (
+            <div className="mb-3 rounded-lg border border-green-800/40 bg-green-950/20 p-3">
+              <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-green-400">
+                <CheckCircle2 className="h-3 w-3" />
+                Boarded
+              </div>
+              <div className="mt-1 text-sm text-green-200">
+                {boardedMessageSwapped
+                  ? `You are now boarded to ${destination}`
+                  : "PIN verified — enjoy your trip"}
+              </div>
+            </div>
+          )}
+
+          <div className="mb-3 grid grid-cols-2 gap-2 text-xs">
+            <div>
+              <div className="text-[10px] uppercase text-neutral-500">
+                From
+              </div>
+              <div className="truncate text-neutral-200">
+                {booking.from_stop_name ?? booking.route_origin ?? "—"}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase text-neutral-500">To</div>
+              <div className="truncate text-neutral-200">
+                {booking.to_stop_name ?? booking.route_destination ?? "—"}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase text-neutral-500">
+                Seats
+              </div>
+              <div className="text-neutral-200">{booking.requested_seats}</div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase text-neutral-500">
+                Name
+              </div>
+              <div className="truncate text-neutral-200">
+                {booking.passenger_name ?? "—"}
+              </div>
+            </div>
+          </div>
+
+          {canCancel && (
+            <button
+              onClick={() => onCancel(booking.handoff_id)}
+              disabled={cancelling}
+              className="flex w-full items-center justify-center gap-2 rounded-lg border border-red-800 bg-red-950/40 px-3 py-2 text-xs font-medium text-red-300 transition-colors hover:bg-red-950/60 disabled:opacity-50"
+            >
+              {cancelling ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Cancelling…
+                </>
+              ) : (
+                <>
+                  <X className="h-3.5 w-3.5" />
+                  Cancel booking
+                </>
+              )}
+            </button>
+          )}
+
+          {cancelError && (
+            <div className="mt-2 text-[10px] text-red-400">{cancelError}</div>
+          )}
+        </div>
       )}
     </div>
   );
