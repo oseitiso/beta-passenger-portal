@@ -51,6 +51,7 @@ export interface BookingDetail {
   pickup_id: string | null;
   pickup_status: string | null;
   pickup_missed_reason: string | null;
+  pickup_disruption_flag: boolean | null;
   driver_id: string | null;
   trip_code: string | null;
   trip_status: string | null;

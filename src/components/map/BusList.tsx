@@ -102,6 +102,11 @@ function findBookingBus(
   );
 }
 
+/** True when this booking was flagged as disrupted (trip ended before alight). */
+function isDisrupted(booking: BookingDetail): boolean {
+  return booking.pickup_disruption_flag === true;
+}
+
 export function BusList({
   buses,
   selectedBusId,
@@ -124,8 +129,6 @@ export function BusList({
 
   const bookingBus = findBookingBus(buses, activeBooking);
 
-  // Load history lazily when the panel opens (avoids reading localStorage
-  // on every render and keeps SSR-safe).
   useEffect(() => {
     if (historyOpen) {
       setHistory(getBookingHistory());
@@ -340,10 +343,10 @@ export function BusList({
  * Banner shown when the most recent booking ended and there's no live
  * active booking. Explains the outcome instead of silently vanishing.
  *
- * Rendered in place of BookingReceipt when activeBooking is null but
- * recentlyEndedBooking is set (e.g. after a CANCELLED or DECLINED).
+ * If the booking was flagged as disrupted, uses a distinct warning style.
  */
 function EndedBanner({ booking }: { booking: BookingDetail }) {
+  const disrupted = isDisrupted(booking);
   const st = statusLabel(booking.handoff_status);
   const destination =
     booking.to_stop_name ??
@@ -352,6 +355,9 @@ function EndedBanner({ booking }: { booking: BookingDetail }) {
     "your destination";
 
   const message = (() => {
+    if (disrupted) {
+      return `You were never marked as arriving at ${destination}. The trip was ended early.`;
+    }
     switch (booking.handoff_status) {
       case "COMPLETED":
         return `Trip completed — you arrived at ${destination}`;
@@ -368,14 +374,26 @@ function EndedBanner({ booking }: { booking: BookingDetail }) {
     }
   })();
 
+  const label = disrupted ? "Trip disrupted" : st.label;
+  const accent = disrupted ? "text-amber-300" : st.colorClass;
+  const icon = disrupted ? (
+    <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-400" />
+  ) : (
+    <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-400" />
+  );
+
   return (
-    <div className="flex-shrink-0 border-b border-neutral-800 bg-neutral-900/50 px-4 py-3">
+    <div
+      className={`flex-shrink-0 border-b px-4 py-3 ${
+        disrupted
+          ? "border-amber-900/40 bg-amber-950/20"
+          : "border-neutral-800 bg-neutral-900/50"
+      }`}
+    >
       <div className="flex items-start gap-2">
-        <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-400" />
+        {icon}
         <div className="min-w-0 flex-1">
-          <div className={`text-xs font-semibold ${st.colorClass}`}>
-            {st.label}
-          </div>
+          <div className={`text-xs font-semibold ${accent}`}>{label}</div>
           <div className="mt-0.5 text-xs text-neutral-400">{message}</div>
           <div className="mt-1 font-mono text-[10px] text-neutral-600">
             {booking.booking_reference}
@@ -390,10 +408,12 @@ function EndedBanner({ booking }: { booking: BookingDetail }) {
  * Pinned receipt for the passenger's active booking.
  * Persists independently of bus list. Live bus context degrades gracefully.
  *
- * PIN visibility rule: only shown during ACCEPTED (driver confirmed but not
- * yet boarded). Once PICKED_UP, the PIN is considered consumed and retired.
- * A confirmation panel appears instead, swapping its message after 5s from
- * "PIN verified — enjoy your trip" to "You are now boarded to [destination]".
+ * PIN visibility rule: only shown during ACCEPTED. Once PICKED_UP, the PIN
+ * is retired and a confirmation panel appears, swapping its message after
+ * 5s from "PIN verified" to "You are now boarded to [destination]".
+ *
+ * Disruption rule: when pickup_disruption_flag is true, the receipt shows a
+ * distinct disrupted state instead of the normal onboard messaging.
  */
 function BookingReceipt({
   booking,
@@ -411,7 +431,10 @@ function BookingReceipt({
   const [expanded, setExpanded] = useState(false);
   const [boardedMessageSwapped, setBoardedMessageSwapped] = useState(false);
 
-  const statusInfo = statusLabel(booking.handoff_status);
+  const disrupted = isDisrupted(booking);
+  const statusInfo = disrupted
+    ? { label: "Trip disrupted", colorClass: "text-amber-300" }
+    : statusLabel(booking.handoff_status);
 
   // PIN is only live between driver confirmation and boarding.
   const showPin =
@@ -425,7 +448,6 @@ function BookingReceipt({
   const speed = liveBus ? Math.round(liveBus.live?.speed_kph ?? 0) : null;
   const lastSeen = liveBus ? timeSince(liveBus.live?.last_position_at) : null;
 
-  // Resolve the actual booked destination with sensible fallbacks.
   const destination =
     booking.to_stop_name ??
     booking.route_destination ??
@@ -434,26 +456,34 @@ function BookingReceipt({
 
   const isBoarded = booking.handoff_status === "PICKED_UP";
 
-  // Swap the "PIN verified" message for the destination message after 5s.
   useEffect(() => {
-    if (!isBoarded) {
+    if (!isBoarded || disrupted) {
       setBoardedMessageSwapped(false);
       return;
     }
     const t = setTimeout(() => setBoardedMessageSwapped(true), 5000);
     return () => clearTimeout(t);
-  }, [isBoarded]);
+  }, [isBoarded, disrupted]);
 
   return (
-    <div className="flex-shrink-0 border-b border-neutral-800 bg-neutral-950">
-      {/* Compact header row — always visible */}
+    <div
+      className={`flex-shrink-0 border-b ${
+        disrupted
+          ? "border-amber-900/40 bg-amber-950/10"
+          : "border-neutral-800 bg-neutral-950"
+      }`}
+    >
       <button
         onClick={() => setExpanded((v) => !v)}
         className="w-full px-4 py-3 text-left transition-colors hover:bg-neutral-900"
       >
         <div className="flex items-center gap-2">
-          <span className="rounded-full bg-orange-600 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white">
-            Your booking
+          <span
+            className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white ${
+              disrupted ? "bg-amber-600" : "bg-orange-600"
+            }`}
+          >
+            {disrupted ? "Disrupted" : "Your booking"}
           </span>
           <span className={`text-xs font-semibold ${statusInfo.colorClass}`}>
             {statusInfo.label}
@@ -492,7 +522,14 @@ function BookingReceipt({
 
         {/* Live bus / status row — always visible for quick context */}
         <div className="mt-2 flex items-center gap-2 text-xs">
-          {liveBus ? (
+          {disrupted ? (
+            <>
+              <AlertCircle className="h-3.5 w-3.5 flex-shrink-0 text-amber-300" />
+              <span className="text-amber-300">
+                Trip ended before you arrived at {destination}
+              </span>
+            </>
+          ) : liveBus ? (
             <>
               <Bus className="h-3.5 w-3.5 flex-shrink-0 text-orange-500" />
               <span className="min-w-0 flex-1 truncate font-medium text-neutral-200">
@@ -532,9 +569,24 @@ function BookingReceipt({
         </div>
       </button>
 
-      {/* Expandable detail section — PIN retired after PICKED_UP */}
       {expanded && (
         <div className="border-t border-neutral-800 px-4 py-3">
+          {disrupted && (
+            <div className="mb-3 rounded-lg border border-amber-800/50 bg-amber-950/30 p-3">
+              <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-amber-400">
+                <AlertCircle className="h-3 w-3" />
+                Trip disrupted
+              </div>
+              <div className="mt-1 text-sm text-amber-200">
+                The trip ended before you were marked as arriving at{" "}
+                {destination}. You were not charged for this leg.
+              </div>
+              <div className="mt-2 text-[11px] text-amber-300/80">
+                If you need help, open a complaint from the Help menu.
+              </div>
+            </div>
+          )}
+
           {showPin && (
             <div className="mb-3 rounded-lg border border-orange-700/40 bg-neutral-900/50 p-3">
               <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-orange-400">
@@ -547,7 +599,7 @@ function BookingReceipt({
             </div>
           )}
 
-          {isBoarded && (
+          {isBoarded && !disrupted && (
             <div className="mb-3 rounded-lg border border-green-800/40 bg-green-950/20 p-3">
               <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-green-400">
                 <CheckCircle2 className="h-3 w-3" />

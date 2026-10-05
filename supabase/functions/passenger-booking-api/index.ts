@@ -1,4 +1,4 @@
-// B-ETA Passenger Booking API — v1.0
+// B-ETA Passenger Booking API — v1.2
 // Public-facing passenger booking endpoints. No auth required.
 //
 // Endpoints:
@@ -47,12 +47,12 @@ async function parseJsonBody(req: Request): Promise<any | null> {
   }
 }
 
-// ─── Route handlers ─────────────────────────────────────────────────────
+// ───────────────────────── Route handlers ─────────────────────────
 
 async function handleHealth(): Promise<Response> {
   return ok({
     status: "B-ETA Passenger Booking API active",
-    version: "1.0.0",
+    version: "1.2.0",
     timestamp: new Date().toISOString(),
   });
 }
@@ -150,6 +150,8 @@ async function handleStatus(url: URL): Promise<Response> {
         p.id as pickup_id,
         p.status as pickup_status,
         p.driver_id,
+        p.missed_reason as pickup_missed_reason,
+        p.disruption_flag as pickup_disruption_flag,
         t.trip_code,
         t.status as trip_status,
         r.name as route_name,
@@ -194,12 +196,18 @@ async function handleRecover(body: any): Promise<Response> {
         ts.name as to_stop_name,
         h.created_at,
         h.expires_at,
+        p.id as pickup_id,
+        p.status as pickup_status,
+        p.driver_id,
+        p.missed_reason as pickup_missed_reason,
+        p.disruption_flag as pickup_disruption_flag,
         t.trip_code,
         r.origin as route_origin,
         r.destination as route_destination
       from booking_handoffs h
       left join stops fs on fs.id = h.from_stop_id
       left join stops ts on ts.id = h.to_stop_id
+      left join pickup_notifications p on p.handoff_id = h.id
       left join trips t on t.id = h.trip_id
       left join routes r on r.id = t.route_id
       where h.passenger_phone = ${body.passenger_phone}
@@ -213,7 +221,7 @@ async function handleRecover(body: any): Promise<Response> {
   }
 }
 
-// ─── Server ─────────────────────────────────────────────────────────────
+// ───────────────────────── Server ─────────────────────────
 
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
