@@ -147,7 +147,11 @@ export function BusList({
     }
   };
 
-  if (loading && buses.length === 0 && !activeBooking && !recentlyEndedBooking) {
+  // ── Loading state ─────────────────────────────────────────────────
+  // Always show the loading screen while the initial fetch is in flight
+  // and no buses have arrived yet. This prevents the empty state from
+  // briefly flashing on refresh before data lands.
+  if (loading && buses.length === 0) {
     return (
       <div className="flex h-full items-center justify-center p-6 text-sm text-neutral-500">
         Loading buses…

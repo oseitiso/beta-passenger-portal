@@ -98,7 +98,6 @@ interface LocationSelectProps {
   placeholder?: string;
   showLocateButton?: boolean;
   fallbackLocations: BotswanaLocation[];
-  /** Which side of the journey this select represents — used for event payloads. */
   role: "from" | "to";
 }
 
@@ -158,8 +157,6 @@ function LocationSelect({
         if (myRequestId !== requestIdRef.current) return;
         locationSearchCache.set(q.toLowerCase(), res);
         setResults(res);
-        // Fire the event only for real server searches, and only on the
-        // request that actually resolved.
         logSearchSubmitted(q, res.length);
       } catch (e) {
         if (myRequestId !== requestIdRef.current) return;
@@ -374,14 +371,21 @@ export default function MapPage() {
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
   const [mounted, setMounted] = useState(false);
   const [bookingBus, setBookingBus] = useState<PublicBus | null>(null);
-  const [activeBooking, setActiveBooking] = useState<BookingDetail | null>(
-    null
-  );
-  const [recentlyEndedBooking, setRecentlyEndedBooking] =
-    useState<BookingDetail | null>(null);
   const [filterMode, setFilterMode] = useState<FilterMode>("dim");
   const [filterHovered, setFilterHovered] = useState(false);
   const [, setTick] = useState(0);
+
+  // ── Lazy initializer: read localStorage synchronously on first render ──
+  // This prevents the sidebar from flickering through the empty state when
+  // the user already has an active booking on page load.
+  const [activeBooking, setActiveBooking] = useState<BookingDetail | null>(
+    () => {
+      if (typeof window === "undefined") return null;
+      return null; // hydrated after mount — see hydration effect below
+    }
+  );
+  const [recentlyEndedBooking, setRecentlyEndedBooking] =
+    useState<BookingDetail | null>(null);
 
   const lastFetchRef = useRef<number>(0);
   const fetchRef = useRef<() => void>(() => {});
@@ -435,12 +439,20 @@ export default function MapPage() {
           "NO_SHOW",
           "COMPLETED",
         ];
-        if (terminalStatuses.includes(result.booking.handoff_status)) {
-          // ── Paper trail: log to history BEFORE clearing ──
+
+        const isDisrupted = result.booking.pickup_disruption_flag === true;
+
+        if (
+          terminalStatuses.includes(result.booking.handoff_status) ||
+          isDisrupted
+        ) {
+          // Persist to history BEFORE clearing the active slot
           appendBookingHistory({
             handoff_id: result.booking.handoff_id,
             booking_reference: result.booking.booking_reference,
-            handoff_status: result.booking.handoff_status,
+            handoff_status: isDisrupted
+              ? "DISRUPTED"
+              : result.booking.handoff_status,
             from_stop_name: result.booking.from_stop_name ?? null,
             to_stop_name: result.booking.to_stop_name ?? null,
             route_origin: result.booking.route_origin ?? null,
@@ -450,18 +462,13 @@ export default function MapPage() {
             ended_at: Date.now(),
           });
 
-          // ── Show an explainer banner for graceful endings ──
-          // COMPLETED / EXPIRED linger in the receipt slot for a short
-          // window so the passenger sees WHY the booking ended.
-          // Hard-terminal states (CANCELLED / DECLINED / NO_SHOW) clear
-          // the active slot immediately but still surface the ended banner.
           const isGracefulEnd =
             result.booking.handoff_status === "COMPLETED" ||
             result.booking.handoff_status === "EXPIRED";
 
           setRecentlyEndedBooking(result.booking);
 
-          if (isGracefulEnd) {
+          if (isGracefulEnd && !isDisrupted) {
             setActiveBooking(result.booking);
             setTimeout(() => {
               clearActiveBooking();
@@ -530,9 +537,6 @@ export default function MapPage() {
   };
 
   const handleCenter = (bus: PublicBus) => {
-    // Center-on-map is an internal drawer action. It does not re-fire
-    // bus_viewed — that would double-count a passenger who is already
-    // looking at the same bus.
     setSelectedBus({ ...bus });
   };
 
