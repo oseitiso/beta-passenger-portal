@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Bus,
   Gauge,
@@ -83,6 +83,8 @@ function statusLabel(status: string): { label: string; colorClass: string } {
       return { label: "No-show", colorClass: "text-amber-400" };
     case "DECLINED":
       return { label: "Declined", colorClass: "text-red-400" };
+    case "DISRUPTED":
+      return { label: "Disrupted", colorClass: "text-amber-300" };
     default:
       return { label: status, colorClass: "text-neutral-300" };
   }
@@ -120,6 +122,15 @@ export function BusList({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [history, setHistory] = useState<BookingHistoryEntry[]>([]);
 
+  // Track whether we've ever had a successful first load. This ensures
+  // the loading screen only shows on the cold start, not on every 15s
+  // poll that flips `loading` back to true.
+  const hasLoadedOnceRef = useRef(false);
+  if (!loading && buses.length >= 0) {
+    // Any completed fetch flips this on.
+    if (!hasLoadedOnceRef.current) hasLoadedOnceRef.current = true;
+  }
+
   const sorted = [...buses].sort((a, b) => {
     const pa = a.vehicle?.registration_plate ?? "";
     const pb = b.vehicle?.registration_plate ?? "";
@@ -148,10 +159,11 @@ export function BusList({
   };
 
   // ── Loading state ─────────────────────────────────────────────────
-  // Always show the loading screen while the initial fetch is in flight
-  // and no buses have arrived yet. This prevents the empty state from
-  // briefly flashing on refresh before data lands.
-  if (loading && buses.length === 0) {
+  // Show the loading screen ONLY on the very first fetch after mount,
+  // and only if there is nothing else to display. Subsequent polling
+  // refreshes leave the existing UI in place.
+  const isColdStart = loading && !hasLoadedOnceRef.current;
+  if (isColdStart && !activeBooking && !recentlyEndedBooking) {
     return (
       <div className="flex h-full items-center justify-center p-6 text-sm text-neutral-500">
         Loading buses…
@@ -388,7 +400,6 @@ function EndedBanner({ booking }: { booking: BookingDetail }) {
 
 /**
  * Pinned receipt for the passenger's active booking.
- * Persists independently of bus list. Live bus context degrades gracefully.
  */
 function BookingReceipt({
   booking,
