@@ -102,7 +102,6 @@ function findBookingBus(
   );
 }
 
-/** True when this booking was flagged as disrupted (trip ended before alight). */
 function isDisrupted(booking: BookingDetail): boolean {
   return booking.pickup_disruption_flag === true;
 }
@@ -156,136 +155,122 @@ export function BusList({
     );
   }
 
-  if (
-    buses.length === 0 &&
-    !activeBooking &&
-    !recentlyEndedBooking &&
-    history.length === 0
-  ) {
-    return (
-      <div className="flex h-full flex-col items-center justify-center p-6 text-center">
-        <Bus className="mb-2 h-8 w-8 text-neutral-600" />
-        <p className="text-sm font-medium text-neutral-400">
-          No buses on the road
-        </p>
-        <p className="mt-1 text-xs text-neutral-600">
-          Check back later, or clear filters
-        </p>
-      </div>
-    );
-  }
+  const showBusEmptyState = buses.length === 0;
 
   return (
-    <div className="flex h-full flex-col">
-      {activeBooking && (
-        <BookingReceipt
-          booking={activeBooking}
-          liveBus={bookingBus}
-          cancelling={cancelling}
-          cancelError={cancelError}
-          onCancel={handleCancel}
-        />
-      )}
+    <div className="flex h-full flex-col overflow-hidden">
+      {/* ── Scrollable content region ─────────────────────────────────── */}
+      <div className="flex-1 overflow-y-auto">
+        {activeBooking && (
+          <BookingReceipt
+            booking={activeBooking}
+            liveBus={bookingBus}
+            cancelling={cancelling}
+            cancelError={cancelError}
+            onCancel={handleCancel}
+          />
+        )}
 
-      {!activeBooking && recentlyEndedBooking && (
-        <EndedBanner booking={recentlyEndedBooking} />
-      )}
+        {!activeBooking && recentlyEndedBooking && (
+          <EndedBanner booking={recentlyEndedBooking} />
+        )}
 
-      <div className="flex-shrink-0 border-b border-neutral-800 px-4 py-2 text-xs font-medium text-neutral-500">
-        {buses.length} {buses.length === 1 ? "bus" : "buses"} active
+        <div className="flex-shrink-0 border-b border-neutral-800 px-4 py-2 text-xs font-medium text-neutral-500">
+          {buses.length} {buses.length === 1 ? "bus" : "buses"} active
+        </div>
+
+        {showBusEmptyState ? (
+          <div className="flex flex-col items-center justify-center px-6 py-12 text-center">
+            <Bus className="mb-2 h-8 w-8 text-neutral-600" />
+            <p className="text-sm font-medium text-neutral-400">
+              No other buses on the road
+            </p>
+            {(activeBooking || recentlyEndedBooking) && (
+              <p className="mt-1 text-xs text-neutral-600">
+                {activeBooking
+                  ? "Your booking is still active — see receipt above"
+                  : "Your recent trip is shown above"}
+              </p>
+            )}
+          </div>
+        ) : (
+          <ul className="divide-y divide-neutral-800">
+            {sorted.map((bus) => {
+              const isSelected = bus.trip_id === selectedBusId;
+              const speed = Math.round(bus.live?.speed_kph ?? 0);
+              const passengers = bus.vehicle?.passenger_count ?? 0;
+              const capacity = bus.vehicle?.capacity;
+              const plate = bus.vehicle?.registration_plate ?? "Unknown";
+              const origin = bus.route?.origin ?? "—";
+              const destination = bus.route?.destination ?? "—";
+              const tripCode = bus.trip_code ?? bus.trip_id.slice(0, 8);
+              const lastSeen = timeSince(bus.live?.last_position_at);
+              const isBookingBus = bus.trip_id === bookingBus?.trip_id;
+
+              return (
+                <li key={bus.trip_id}>
+                  <div
+                    className={`transition-colors ${
+                      isSelected
+                        ? "bg-orange-600/10 border-l-2 border-orange-600"
+                        : "border-l-2 border-transparent"
+                    }`}
+                  >
+                    <button
+                      onClick={() => onSelectBus(bus)}
+                      className="w-full px-4 py-3 text-left transition-colors hover:bg-neutral-900"
+                    >
+                      <div className="flex items-center gap-2">
+                        <div
+                          className={`flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md ${
+                            isBookingBus
+                              ? "bg-orange-600 text-white"
+                              : "bg-orange-600/20 text-orange-500"
+                          }`}
+                        >
+                          <Bus className="h-3.5 w-3.5" />
+                        </div>
+                        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-neutral-100">
+                          {plate}
+                        </span>
+                        <span className="flex flex-shrink-0 items-center gap-1 text-xs text-neutral-400">
+                          <Gauge className="h-3 w-3" />
+                          {speed}
+                        </span>
+                        <span className="flex-shrink-0 text-[10px] text-neutral-500">
+                          {lastSeen}
+                        </span>
+                      </div>
+
+                      <div className="mt-1.5 truncate text-xs text-neutral-300">
+                        {origin} <span className="text-neutral-600">→</span>{" "}
+                        {destination}
+                      </div>
+
+                      <div className="mt-1.5 flex items-center gap-3 text-xs text-neutral-500">
+                        <span className="flex items-center gap-1">
+                          <Users className="h-3 w-3" />
+                          {passengers}
+                          {capacity ? `/${capacity}` : ""}
+                        </span>
+                        <span className="truncate font-mono text-[10px] tracking-tight">
+                          {tripCode}
+                        </span>
+                      </div>
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
       </div>
 
-      {buses.length === 0 ? (
-        <div className="flex flex-1 flex-col items-center justify-center p-6 text-center">
-          <Bus className="mb-2 h-8 w-8 text-neutral-600" />
-          <p className="text-sm font-medium text-neutral-400">
-            No other buses on the road
-          </p>
-          {(activeBooking || recentlyEndedBooking) && (
-            <p className="mt-1 text-xs text-neutral-600">
-              {activeBooking
-                ? "Your booking is still active — see receipt above"
-                : "Your recent trip is shown above"}
-            </p>
-          )}
-        </div>
-      ) : (
-        <ul className="flex-1 divide-y divide-neutral-800 overflow-y-auto">
-          {sorted.map((bus) => {
-            const isSelected = bus.trip_id === selectedBusId;
-            const speed = Math.round(bus.live?.speed_kph ?? 0);
-            const passengers = bus.vehicle?.passenger_count ?? 0;
-            const capacity = bus.vehicle?.capacity;
-            const plate = bus.vehicle?.registration_plate ?? "Unknown";
-            const origin = bus.route?.origin ?? "—";
-            const destination = bus.route?.destination ?? "—";
-            const tripCode = bus.trip_code ?? bus.trip_id.slice(0, 8);
-            const lastSeen = timeSince(bus.live?.last_position_at);
-            const isBookingBus = bus.trip_id === bookingBus?.trip_id;
-
-            return (
-              <li key={bus.trip_id}>
-                <div
-                  className={`transition-colors ${
-                    isSelected
-                      ? "bg-orange-600/10 border-l-2 border-orange-600"
-                      : "border-l-2 border-transparent"
-                  }`}
-                >
-                  <button
-                    onClick={() => onSelectBus(bus)}
-                    className="w-full px-4 py-3 text-left transition-colors hover:bg-neutral-900"
-                  >
-                    <div className="flex items-center gap-2">
-                      <div
-                        className={`flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md ${
-                          isBookingBus
-                            ? "bg-orange-600 text-white"
-                            : "bg-orange-600/20 text-orange-500"
-                        }`}
-                      >
-                        <Bus className="h-3.5 w-3.5" />
-                      </div>
-                      <span className="min-w-0 flex-1 truncate text-sm font-semibold text-neutral-100">
-                        {plate}
-                      </span>
-                      <span className="flex flex-shrink-0 items-center gap-1 text-xs text-neutral-400">
-                        <Gauge className="h-3 w-3" />
-                        {speed}
-                      </span>
-                      <span className="flex-shrink-0 text-[10px] text-neutral-500">
-                        {lastSeen}
-                      </span>
-                    </div>
-
-                    <div className="mt-1.5 truncate text-xs text-neutral-300">
-                      {origin} <span className="text-neutral-600">→</span>{" "}
-                      {destination}
-                    </div>
-
-                    <div className="mt-1.5 flex items-center gap-3 text-xs text-neutral-500">
-                      <span className="flex items-center gap-1">
-                        <Users className="h-3 w-3" />
-                        {passengers}
-                        {capacity ? `/${capacity}` : ""}
-                      </span>
-                      <span className="truncate font-mono text-[10px] tracking-tight">
-                        {tripCode}
-                      </span>
-                    </div>
-                  </button>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-
-      {/* Recent trips — paper trail of ended bookings */}
-      <div className="flex-shrink-0 border-t border-neutral-800">
+      {/* ── Pinned: Recent trips (always visible at bottom) ───────────── */}
+      <div className="flex-shrink-0 border-t border-neutral-800 bg-neutral-950">
         <button
           onClick={() => setHistoryOpen((v) => !v)}
-          className="flex w-full items-center gap-2 px-4 py-2 text-left text-xs text-neutral-500 transition-colors hover:bg-neutral-900"
+          className="flex w-full items-center gap-2 px-4 py-2 text-left text-xs text-neutral-400 transition-colors hover:bg-neutral-900"
         >
           <History className="h-3 w-3" />
           <span className="flex-1">Recent trips</span>
@@ -297,7 +282,7 @@ export function BusList({
         </button>
 
         {historyOpen && (
-          <div className="max-h-64 overflow-y-auto border-t border-neutral-800 bg-neutral-950/50">
+          <div className="max-h-64 overflow-y-auto border-t border-neutral-800">
             {history.length === 0 ? (
               <div className="px-4 py-3 text-xs text-neutral-600">
                 No past trips yet
@@ -342,8 +327,6 @@ export function BusList({
 /**
  * Banner shown when the most recent booking ended and there's no live
  * active booking. Explains the outcome instead of silently vanishing.
- *
- * If the booking was flagged as disrupted, uses a distinct warning style.
  */
 function EndedBanner({ booking }: { booking: BookingDetail }) {
   const disrupted = isDisrupted(booking);
@@ -376,11 +359,6 @@ function EndedBanner({ booking }: { booking: BookingDetail }) {
 
   const label = disrupted ? "Trip disrupted" : st.label;
   const accent = disrupted ? "text-amber-300" : st.colorClass;
-  const icon = disrupted ? (
-    <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-400" />
-  ) : (
-    <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-400" />
-  );
 
   return (
     <div
@@ -391,7 +369,7 @@ function EndedBanner({ booking }: { booking: BookingDetail }) {
       }`}
     >
       <div className="flex items-start gap-2">
-        {icon}
+        <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-400" />
         <div className="min-w-0 flex-1">
           <div className={`text-xs font-semibold ${accent}`}>{label}</div>
           <div className="mt-0.5 text-xs text-neutral-400">{message}</div>
@@ -407,13 +385,6 @@ function EndedBanner({ booking }: { booking: BookingDetail }) {
 /**
  * Pinned receipt for the passenger's active booking.
  * Persists independently of bus list. Live bus context degrades gracefully.
- *
- * PIN visibility rule: only shown during ACCEPTED. Once PICKED_UP, the PIN
- * is retired and a confirmation panel appears, swapping its message after
- * 5s from "PIN verified" to "You are now boarded to [destination]".
- *
- * Disruption rule: when pickup_disruption_flag is true, the receipt shows a
- * distinct disrupted state instead of the normal onboard messaging.
  */
 function BookingReceipt({
   booking,
@@ -436,7 +407,6 @@ function BookingReceipt({
     ? { label: "Trip disrupted", colorClass: "text-amber-300" }
     : statusLabel(booking.handoff_status);
 
-  // PIN is only live between driver confirmation and boarding.
   const showPin =
     booking.booking_pin && booking.handoff_status === "ACCEPTED";
 
@@ -520,7 +490,6 @@ function BookingReceipt({
           </div>
         </div>
 
-        {/* Live bus / status row — always visible for quick context */}
         <div className="mt-2 flex items-center gap-2 text-xs">
           {disrupted ? (
             <>
