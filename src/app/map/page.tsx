@@ -54,7 +54,7 @@ const PassengerMap = dynamic(
       <div className="flex h-full w-full items-center justify-center rounded-lg bg-neutral-900">
         <div className="text-center text-neutral-400">
           <Bus className="mx-auto mb-2 h-8 w-8 animate-pulse" />
-          <p className="text-sm">Loading map…</p>
+          <p className="text-sm">Loading mapâ€¦</p>
         </div>
       </div>
     ),
@@ -256,7 +256,7 @@ function LocationSelect({
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search any location…"
+                placeholder="Search any locationâ€¦"
                 className="flex-1 bg-transparent text-sm text-neutral-100 placeholder:text-neutral-600 focus:outline-none"
               />
               {searching && (
@@ -340,7 +340,7 @@ function LocationSelect({
 
             {showSearching && !showServerResults && !showFallback && (
               <div className="px-3 py-2 text-xs text-neutral-500">
-                Searching…
+                Searchingâ€¦
               </div>
             )}
 
@@ -363,7 +363,14 @@ export default function MapPage() {
   const [buses, setBuses] = useState<PublicBus[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selectedBus, setSelectedBus] = useState<PublicBus | null>(null);
+  const [selectedBusId, setSelectedBusId] = useState<string | null>(null);
+  const selectedBus = useMemo(
+    () =>
+      selectedBusId
+        ? buses.find((b) => b.trip_id === selectedBusId) ?? null
+        : null,
+    [buses, selectedBusId]
+  );
   const [origin, setOrigin] = useState("");
   const [destination, setDestination] = useState("");
   const [debouncedOrigin, setDebouncedOrigin] = useState("");
@@ -375,13 +382,13 @@ export default function MapPage() {
   const [filterHovered, setFilterHovered] = useState(false);
   const [, setTick] = useState(0);
 
-  // ── Lazy initializer: read localStorage synchronously on first render ──
+  // â”€â”€ Lazy initializer: read localStorage synchronously on first render â”€â”€
   // This prevents the sidebar from flickering through the empty state when
   // the user already has an active booking on page load.
   const [activeBooking, setActiveBooking] = useState<BookingDetail | null>(
     () => {
       if (typeof window === "undefined") return null;
-      return null; // hydrated after mount — see hydration effect below
+      return null; // hydrated after mount â€” see hydration effect below
     }
   );
   const [recentlyEndedBooking, setRecentlyEndedBooking] =
@@ -528,16 +535,16 @@ export default function MapPage() {
   const filterIdle = !filterActive && !filterHovered;
 
   const handleSelectBus = (bus: PublicBus) => {
-    setSelectedBus(bus);
+    setSelectedBusId(bus.trip_id);
     logBusViewed(bus.trip_id, bus.route?.route_id ?? null);
   };
 
   const handleCloseDetail = () => {
-    setSelectedBus(null);
+    setSelectedBusId(null);
   };
 
   const handleCenter = (bus: PublicBus) => {
-    setSelectedBus({ ...bus });
+    setSelectedBusId(bus.trip_id);
   };
 
   const handleOpenBooking = (bus: PublicBus) => {
@@ -637,7 +644,7 @@ export default function MapPage() {
         <main className="relative flex-1 overflow-hidden">
           <PassengerMap
             buses={buses}
-            selectedBusId={selectedBus?.trip_id ?? null}
+            selectedBusId={selectedBusId}
             onSelectBus={handleSelectBus}
           />
 
