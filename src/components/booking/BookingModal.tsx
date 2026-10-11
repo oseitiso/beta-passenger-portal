@@ -67,22 +67,29 @@ export function BookingModal({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [result, setResult] = useState<BookingResponse | null>(null);
 
-  // Ref that flips to true the moment a booking is confirmed, so the
-  // unmount cleanup knows not to fire booking_abandoned after success.
   const confirmedRef = useRef(false);
   const abandonedFiredRef = useRef(false);
 
-  // Default boarding stop: the first boardable stop (API already resolves
-  // this from the passenger's search via segment_availability)
+  const boardableStops = useMemo(
+    () => routeStops.filter((s) => s.boardable),
+    [routeStops]
+  );
+  const hasAnyBoardableStop = boardableStops.length > 0;
+
+  // Default boarding stop:
+  //   1. segment_availability.from_stop_id (from the passenger's search) if still boardable
+  //   2. otherwise the first boardable stop
+  //   3. otherwise "" (no default — the dropdown will show a placeholder)
   const defaultFromId = useMemo(() => {
     if (bus.segment_availability?.from_stop_id) {
       const match = routeStops.find(
-        (s) => s.stop_id === bus.segment_availability!.from_stop_id
+        (s) =>
+          s.stop_id === bus.segment_availability!.from_stop_id && s.boardable
       );
       if (match) return match.stop_id;
     }
     const firstBoardable = routeStops.find((s) => s.boardable);
-    return firstBoardable?.stop_id ?? routeStops[0]?.stop_id ?? "";
+    return firstBoardable?.stop_id ?? "";
   }, [bus.segment_availability, routeStops]);
 
   const defaultToId = useMemo(() => {
@@ -98,8 +105,7 @@ export function BookingModal({
   const [fromStopId, setFromStopId] = useState<string>(defaultFromId);
   const [toStopId, setToStopId] = useState<string>(defaultToId);
 
-  // Fire booking_started exactly once on mount, and booking_abandoned
-  // exactly once on unmount if no booking was confirmed.
+  // Fire booking_started once on mount, booking_abandoned once on unmount.
   useEffect(() => {
     logBookingStarted(bus.trip_id, defaultFromId || null, defaultToId || null);
     return () => {
@@ -111,9 +117,9 @@ export function BookingModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bus.trip_id]);
 
-  // If the parent's defaults change (e.g. segment_availability arrives late),
-  // realign if the current selections are invalid.
+  // If the current boarding stop became unboardable, realign to the default.
   useEffect(() => {
+    if (!fromStopId) return;
     const fromStop = routeStops.find((s) => s.stop_id === fromStopId);
     if (!fromStop || !fromStop.boardable) {
       setFromStopId(defaultFromId);
@@ -129,16 +135,16 @@ export function BookingModal({
     [routeStops, toStopId]
   );
 
-  // Alighting stops must come AFTER the boarding stop in route order.
-  // Everything before or at boarding is disabled.
+  // Alighting options — everything strictly after the boarding stop.
   const alightingOptions = useMemo(() => {
     const fromIndex = routeStops.findIndex((s) => s.stop_id === fromStopId);
     if (fromIndex === -1) return [];
     return routeStops.slice(fromIndex + 1);
   }, [routeStops, fromStopId]);
 
-  // If the current alighting stop is no longer valid, reset to the next one
+  // Keep alighting valid.
   useEffect(() => {
+    if (!fromStopId) return;
     const fromIndex = routeStops.findIndex((s) => s.stop_id === fromStopId);
     const toIndex = routeStops.findIndex((s) => s.stop_id === toStopId);
     if (toIndex <= fromIndex) {
@@ -147,6 +153,7 @@ export function BookingModal({
     }
   }, [fromStopId, toStopId, routeStops]);
 
+  // Lock background scroll while modal is open.
   useEffect(() => {
     const original = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -155,6 +162,7 @@ export function BookingModal({
     };
   }, []);
 
+  // Escape to close (only while in form stage).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && stage === "form") onClose();
@@ -176,7 +184,9 @@ export function BookingModal({
     }
     if (!fromStop.boardable) {
       setErrorMsg(
-        `Cannot board at ${fromStop.name}: ${reasonLabel(fromStop.unboardable_reason)}.`
+        `Cannot board at ${fromStop.name}: ${reasonLabel(
+          fromStop.unboardable_reason
+        )}.`
       );
       setStage("error");
       return;
@@ -226,8 +236,6 @@ export function BookingModal({
         });
       }
 
-      // Mark confirmed before firing the success event, so the unmount
-      // cleanup skips booking_abandoned.
       confirmedRef.current = true;
       if (response.booking_reference) {
         logBookingConfirmed(response.booking_reference, bus.trip_id);
@@ -254,6 +262,8 @@ export function BookingModal({
     fromStop!.boardable === true &&
     routeStops.findIndex((s) => s.stop_id === toStopId) >
       routeStops.findIndex((s) => s.stop_id === fromStopId);
+
+  const journeyReady = Boolean(fromStop) && Boolean(toStop);
 
   return (
     <div
@@ -308,21 +318,29 @@ export function BookingModal({
                 </div>
               </div>
 
-              {/* Journey preview */}
+              {/* Journey preview — empty state until both stops are picked */}
               <div className="mb-4 rounded-lg border border-orange-900/40 bg-orange-950/20 p-3">
                 <div className="flex items-center gap-2 text-xs text-orange-400/80">
                   <ArrowRight className="h-3 w-3" />
                   Your journey
                 </div>
-                <div className="mt-1 flex items-center gap-2 text-sm">
-                  <span className="font-medium text-neutral-100">
-                    {fromStop?.name ?? "—"}
-                  </span>
-                  <span className="text-neutral-600">→</span>
-                  <span className="font-medium text-neutral-100">
-                    {toStop?.name ?? "—"}
-                  </span>
-                </div>
+                {journeyReady ? (
+                  <div className="mt-1 flex items-center gap-2 text-sm">
+                    <span className="font-medium text-neutral-100">
+                      {fromStop!.name}
+                    </span>
+                    <span className="text-neutral-600">→</span>
+                    <span className="font-medium text-neutral-100">
+                      {toStop!.name}
+                    </span>
+                  </div>
+                ) : (
+                  <div className="mt-1 text-sm text-neutral-400">
+                    {hasAnyBoardableStop
+                      ? "Select a boarding and alighting stop to see your journey."
+                      : "No stops are currently available to board on this bus."}
+                  </div>
+                )}
               </div>
 
               {/* Boarding stop */}
@@ -334,8 +352,17 @@ export function BookingModal({
                 <select
                   value={fromStopId}
                   onChange={(e) => setFromStopId(e.target.value)}
-                  className="w-full rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 focus:border-orange-600 focus:outline-none"
+                  disabled={!hasAnyBoardableStop}
+                  className="w-full rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 focus:border-orange-600 focus:outline-none disabled:opacity-50"
                 >
+                  {!hasAnyBoardableStop && (
+                    <option value="">
+                      No stops available to board right now
+                    </option>
+                  )}
+                  {hasAnyBoardableStop && !fromStopId && (
+                    <option value="">Select a boarding stop…</option>
+                  )}
                   {routeStops.map((stop) => {
                     const disabled = !stop.boardable;
                     return (
@@ -352,10 +379,22 @@ export function BookingModal({
                     );
                   })}
                 </select>
-                {fromStop && !fromStop.boardable && (
+                {hasAnyBoardableStop && fromStop && !fromStop.boardable && (
                   <div className="mt-1 flex items-center gap-1 text-xs text-amber-400">
                     <Ban className="h-3 w-3" />
                     {reasonLabel(fromStop.unboardable_reason)}
+                  </div>
+                )}
+                {hasAnyBoardableStop && !fromStopId && (
+                  <div className="mt-1 text-xs text-neutral-500">
+                    Stops behind the bus are not available.
+                  </div>
+                )}
+                {!hasAnyBoardableStop && (
+                  <div className="mt-1 flex items-center gap-1 text-xs text-amber-400">
+                    <Ban className="h-3 w-3" />
+                    This bus has no boardable stops right now. Try another bus
+                    ahead on the route.
                   </div>
                 )}
               </div>
@@ -369,19 +408,22 @@ export function BookingModal({
                 <select
                   value={toStopId}
                   onChange={(e) => setToStopId(e.target.value)}
-                  className="w-full rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 focus:border-orange-600 focus:outline-none"
+                  disabled={!fromStopId || alightingOptions.length === 0}
+                  className="w-full rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 focus:border-orange-600 focus:outline-none disabled:opacity-50"
                 >
+                  {(!fromStopId || alightingOptions.length === 0) && (
+                    <option value="">
+                      {fromStopId
+                        ? "No stops available after your boarding stop."
+                        : "Select a boarding stop first."}
+                    </option>
+                  )}
                   {alightingOptions.map((stop) => (
                     <option key={stop.stop_id} value={stop.stop_id}>
                       {stop.name}
                     </option>
                   ))}
                 </select>
-                {alightingOptions.length === 0 && (
-                  <div className="mt-1 text-xs text-amber-400">
-                    No stops available after your boarding stop.
-                  </div>
-                )}
               </div>
 
               {/* Name */}
