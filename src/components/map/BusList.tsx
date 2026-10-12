@@ -13,15 +13,10 @@ import {
   Clock,
   MapPinOff,
   CheckCircle2,
-  History,
   AlertCircle,
 } from "lucide-react";
 import type { PublicBus } from "@/lib/passengerApi";
-import type {
-  BookingDetail,
-  BookingHistoryEntry,
-} from "@/lib/passengerBookingApi";
-import { getBookingHistory } from "@/lib/passengerBookingApi";
+import type { BookingDetail } from "@/lib/passengerBookingApi";
 
 interface BusListProps {
   buses: PublicBus[];
@@ -50,17 +45,6 @@ function formatCountdown(expiresAt: string): string {
   const mins = Math.floor(remainingSec / 60);
   const secs = remainingSec % 60;
   return `${mins}:${String(secs).padStart(2, "0")}`;
-}
-
-function formatRelativeTime(ms: number): string {
-  const seconds = Math.floor((Date.now() - ms) / 1000);
-  if (seconds < 60) return "just now";
-  const mins = Math.floor(seconds / 60);
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
 }
 
 function statusLabel(status: string): { label: string; colorClass: string } {
@@ -119,15 +103,9 @@ export function BusList({
 }: BusListProps) {
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const [history, setHistory] = useState<BookingHistoryEntry[]>([]);
 
-  // Track whether we've ever had a successful first load. This ensures
-  // the loading screen only shows on the cold start, not on every 15s
-  // poll that flips `loading` back to true.
   const hasLoadedOnceRef = useRef(false);
   if (!loading && buses.length >= 0) {
-    // Any completed fetch flips this on.
     if (!hasLoadedOnceRef.current) hasLoadedOnceRef.current = true;
   }
 
@@ -138,12 +116,6 @@ export function BusList({
   });
 
   const bookingBus = findBookingBus(buses, activeBooking);
-
-  useEffect(() => {
-    if (historyOpen) {
-      setHistory(getBookingHistory());
-    }
-  }, [historyOpen]);
 
   const handleCancel = async (handoffId: string) => {
     if (!confirm("Cancel this booking request?")) return;
@@ -158,10 +130,6 @@ export function BusList({
     }
   };
 
-  // ── Loading state ─────────────────────────────────────────────────
-  // Show the loading screen ONLY on the very first fetch after mount,
-  // and only if there is nothing else to display. Subsequent polling
-  // refreshes leave the existing UI in place.
   const isColdStart = loading && !hasLoadedOnceRef.current;
   if (isColdStart && !activeBooking && !recentlyEndedBooking) {
     return (
@@ -175,7 +143,6 @@ export function BusList({
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      {/* ── Scrollable content region ─────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto">
         {activeBooking && (
           <BookingReceipt
@@ -281,69 +248,10 @@ export function BusList({
           </ul>
         )}
       </div>
-
-      {/* ── Pinned: Recent trips (always visible at bottom) ───────────── */}
-      <div className="flex-shrink-0 border-t border-neutral-800 bg-neutral-950">
-        <button
-          onClick={() => setHistoryOpen((v) => !v)}
-          className="flex w-full items-center gap-2 px-4 py-2 text-left text-xs text-neutral-400 transition-colors hover:bg-neutral-900"
-        >
-          <History className="h-3 w-3" />
-          <span className="flex-1">Recent trips</span>
-          {historyOpen ? (
-            <ChevronUp className="h-3 w-3" />
-          ) : (
-            <ChevronDown className="h-3 w-3" />
-          )}
-        </button>
-
-        {historyOpen && (
-          <div className="max-h-64 overflow-y-auto border-t border-neutral-800">
-            {history.length === 0 ? (
-              <div className="px-4 py-3 text-xs text-neutral-600">
-                No past trips yet
-              </div>
-            ) : (
-              <ul className="divide-y divide-neutral-800/60">
-                {history.map((entry) => {
-                  const st = statusLabel(entry.handoff_status);
-                  const from = entry.from_stop_name ?? entry.route_origin ?? "—";
-                  const to =
-                    entry.to_stop_name ?? entry.route_destination ?? "—";
-                  return (
-                    <li key={entry.handoff_id} className="px-4 py-2 text-xs">
-                      <div className="flex items-center gap-2">
-                        <span
-                          className={`text-[10px] font-semibold uppercase ${st.colorClass}`}
-                        >
-                          {st.label}
-                        </span>
-                        <span className="ml-auto text-[10px] text-neutral-600">
-                          {formatRelativeTime(entry.ended_at)}
-                        </span>
-                      </div>
-                      <div className="mt-1 truncate font-mono text-[10px] text-neutral-500">
-                        {entry.booking_reference}
-                      </div>
-                      <div className="mt-0.5 truncate text-neutral-300">
-                        {from} <span className="text-neutral-600">→</span> {to}
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </div>
-        )}
-      </div>
     </div>
   );
 }
 
-/**
- * Banner shown when the most recent booking ended and there's no live
- * active booking. Explains the outcome instead of silently vanishing.
- */
 function EndedBanner({ booking }: { booking: BookingDetail }) {
   const disrupted = isDisrupted(booking);
   const st = statusLabel(booking.handoff_status);
@@ -398,9 +306,6 @@ function EndedBanner({ booking }: { booking: BookingDetail }) {
   );
 }
 
-/**
- * Pinned receipt for the passenger's active booking.
- */
 function BookingReceipt({
   booking,
   liveBus,
@@ -529,14 +434,14 @@ function BookingReceipt({
             <>
               <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0 text-green-300" />
               <span className="text-green-300">
-                On board — you'll be dropped at {destination}
+                On board — you&apos;ll be dropped at {destination}
               </span>
             </>
           ) : booking.handoff_status === "MISSED" ? (
             <>
               <MapPinOff className="h-3.5 w-3.5 flex-shrink-0 text-amber-300" />
               <span className="text-amber-300">
-                Driver didn't arrive
+                Driver didn&apos;t arrive
                 {booking.pickup_missed_reason
                   ? ` — ${booking.pickup_missed_reason}`
                   : ""}

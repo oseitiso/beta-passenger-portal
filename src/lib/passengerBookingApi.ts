@@ -1,4 +1,6 @@
-// Client for the passenger-booking-api Edge Function.
+// Client for the passenger-booking endpoints and the local "paper trail"
+// of ended bookings. Uses localStorage for both the active booking slot
+// and the rolling history log.
 
 const API_BASE =
   process.env.NEXT_PUBLIC_PASSENGER_BOOKING_API_URL ??
@@ -8,27 +10,15 @@ const ANON_KEY =
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??
   "sb_publishable_o2CPNKg49wAwJysjiGp08A_V0ZYeZjH";
 
-// ───────────────────────── Types ─────────────────────────
-
-export interface BookingRequest {
-  trip_id: string;
-  from_stop_id: string;
-  to_stop_id: string;
-  requested_seats?: number;
-  user_id?: string;
-  passenger_name?: string;
-  passenger_phone?: string;
-  preferred_seat?: number;
-}
-
 export interface BookingResponse {
   success: boolean;
   handoff_id?: string;
+  booking_reference?: string;
   pickup_id?: string;
   token?: string;
-  booking_reference?: string;
   expires_at?: string;
   status?: string;
+  booking_pin?: string | null;
   error?: string;
 }
 
@@ -36,28 +26,21 @@ export interface BookingDetail {
   handoff_id: string;
   booking_reference: string;
   handoff_status: string;
-  booking_pin: string | null;
-  passenger_name: string | null;
-  passenger_phone: string | null;
-  requested_seats: number;
-  from_stop_id: string;
-  to_stop_id: string;
-  from_stop_name: string | null;
-  to_stop_name: string | null;
+  pickup_status?: string | null;
+  booking_pin?: string | null;
   created_at: string;
   expires_at: string;
-  accepted_at: string | null;
-  picked_up_at: string | null;
-  pickup_id: string | null;
-  pickup_status: string | null;
-  pickup_missed_reason: string | null;
-  pickup_disruption_flag: boolean | null;
-  driver_id: string | null;
-  trip_code: string | null;
-  trip_status: string | null;
-  route_name: string | null;
-  route_origin: string | null;
-  route_destination: string | null;
+  requested_seats: number;
+  passenger_name?: string | null;
+  passenger_phone?: string | null;
+  from_stop_name?: string | null;
+  to_stop_name?: string | null;
+  route_name?: string | null;
+  route_origin?: string | null;
+  route_destination?: string | null;
+  trip_code?: string | null;
+  pickup_missed_reason?: string | null;
+  pickup_disruption_flag?: boolean | null;
 }
 
 /**
@@ -131,7 +114,7 @@ export function clearActiveBooking(): void {
   localStorage.removeItem(BOOKING_STORAGE_KEY);
 }
 
-// ───────────────────────── Booking history (paper trail) ─────────────────────────
+// ───────────────────────── Booking history (paper trail) ───────────────────
 
 /**
  * Upsert an ended booking into the rolling history log.
@@ -159,7 +142,9 @@ export function getBookingHistory(): BookingHistoryEntry[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = localStorage.getItem(HISTORY_KEY);
-    return raw ? JSON.parse(raw) : [];
+    if (!raw) return [];
+    const list = JSON.parse(raw);
+    return Array.isArray(list) ? list : [];
   } catch {
     return [];
   }
@@ -170,80 +155,54 @@ export function clearBookingHistory(): void {
   localStorage.removeItem(HISTORY_KEY);
 }
 
-// ───────────────────────── HTTP ─────────────────────────
+// ───────────────────────── Booking API calls ───────────────────────────────
 
-async function post<T>(path: string, body: unknown): Promise<T> {
+async function request<T>(
+  path: string,
+  init?: RequestInit
+): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
-    method: "POST",
+    ...init,
     headers: {
       "Content-Type": "application/json",
-      apikey: ANON_KEY,
-      Authorization: `Bearer ${ANON_KEY}`,
-    },
-    body: JSON.stringify(body),
-  });
-  const text = await res.text();
-  try {
-    return JSON.parse(text) as T;
-  } catch {
-    throw new Error(`API ${path} returned invalid JSON: ${text.slice(0, 200)}`);
-  }
-}
-
-async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: "GET",
-    headers: {
       Accept: "application/json",
-      apikey: ANON_KEY,
-      Authorization: `Bearer ${ANON_KEY}`,
+      ...(init?.headers ?? {}),
     },
-    cache: "no-store",
   });
-  const text = await res.text();
-  try {
-    return JSON.parse(text) as T;
-  } catch {
-    throw new Error(`API ${path} returned invalid JSON: ${text.slice(0, 200)}`);
-  }
+  const body = await res.json().catch(() => ({}));
+  return body as T;
 }
 
-// ───────────────────────── Public methods ─────────────────────────
-
-export async function requestBooking(
-  req: Omit<BookingRequest, "anonymous_id">
-): Promise<BookingResponse> {
-  const anonymous_id = getOrCreateAnonymousId();
-  return post<BookingResponse>("/booking/request", {
-    ...req,
-    anonymous_id,
-    requested_seats: req.requested_seats ?? 1,
-  });
-}
-
-export async function cancelBooking(
-  handoffId: string
-): Promise<{
-  success: boolean;
-  status?: string;
-  cooldown_until?: string | null;
-  error?: string;
-}> {
-  const anonymous_id = getOrCreateAnonymousId();
-  return post("/booking/cancel", {
-    handoff_id: handoffId,
-    anonymous_id,
+export async function requestBooking(input: {
+  trip_id: string;
+  from_stop_id: string;
+  to_stop_id: string;
+  requested_seats: number;
+  passenger_name?: string;
+  passenger_phone?: string;
+}): Promise<BookingResponse> {
+  return request<BookingResponse>("/booking/request", {
+    method: "POST",
+    body: JSON.stringify({
+      ...input,
+      anonymous_id: getOrCreateAnonymousId(),
+    }),
   });
 }
 
 export async function getBookingStatus(
-  reference: string
+  bookingReference: string
 ): Promise<{ success: boolean; booking?: BookingDetail; error?: string }> {
-  return get(`/booking/status?reference=${encodeURIComponent(reference)}`);
+  return request(
+    `/booking/status?reference=${encodeURIComponent(bookingReference)}`
+  );
 }
 
-export async function recoverBookings(
-  phone: string
-): Promise<{ success: boolean; bookings: BookingDetail[]; count: number }> {
-  return post("/booking/recover", { passenger_phone: phone });
+export async function cancelBooking(
+  handoffId: string
+): Promise<{ success: boolean; error?: string }> {
+  return request(`/booking/cancel`, {
+    method: "POST",
+    body: JSON.stringify({ handoff_id: handoffId }),
+  });
 }
