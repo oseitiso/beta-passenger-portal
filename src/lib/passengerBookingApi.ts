@@ -203,6 +203,9 @@ export async function cancelBooking(
 ): Promise<{ success: boolean; error?: string }> {
   return request(`/booking/cancel`, {
     method: "POST",
-    body: JSON.stringify({ handoff_id: handoffId }),
+    body: JSON.stringify({
+      handoff_id: handoffId,
+      anonymous_id: getOrCreateAnonymousId(),
+    }),
   });
 }

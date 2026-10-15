@@ -3,10 +3,15 @@
 import { useEffect, useRef, useState, useMemo } from "react";
 import { MapPin, X, Loader2, Search } from "lucide-react";
 import {
-  searchLocations,
+  BOTSWANA_LOCATIONS,
+  searchLocations as searchLocalLocations,
   findNearestTown,
   type BotswanaLocation,
 } from "@/lib/botswanaLocations";
+import {
+  searchLocations as searchRemoteLocations,
+  type SearchedLocation,
+} from "@/lib/passengerApi";
 import { getCurrentPosition, type GeoError } from "@/lib/geolocation";
 
 interface LocationComboboxProps {
@@ -17,10 +22,55 @@ interface LocationComboboxProps {
   enableGeolocation?: boolean;
 }
 
-// Height of one dropdown item in pixels
+/** Shared display shape used by the dropdown list — either source can produce it. */
+interface DisplayLocation {
+  name: string;
+  region: string | null;
+  lat: number;
+  lng: number;
+}
+
 const ITEM_HEIGHT = 38;
-// How many items to show before scrolling starts
 const VISIBLE_ITEMS = 8;
+const DEBOUNCE_MS = 250;
+
+function fromHardcoded(loc: BotswanaLocation): DisplayLocation {
+  return {
+    name: loc.name,
+    region: loc.region,
+    lat: loc.lat,
+    lng: loc.lng,
+  };
+}
+
+function fromRemote(loc: SearchedLocation): DisplayLocation {
+  return {
+    name: loc.name,
+    region: loc.region,
+    lat: loc.lat,
+    lng: loc.lng,
+  };
+}
+
+/**
+ * Merge two lists of locations, deduplicating by lowercased name. Local
+ * results take priority over remote ones with the same name, because the
+ * hardcoded entries carry curated region labels.
+ */
+function mergeUnique(
+  local: DisplayLocation[],
+  remote: DisplayLocation[]
+): DisplayLocation[] {
+  const seen = new Set<string>();
+  const out: DisplayLocation[] = [];
+  for (const loc of [...local, ...remote]) {
+    const key = loc.name.trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(loc);
+  }
+  return out;
+}
 
 export function LocationCombobox({
   label,
@@ -36,9 +86,16 @@ export function LocationCombobox({
   const [geoError, setGeoError] = useState<string | null>(null);
   const [detectedNear, setDetectedNear] = useState<string | null>(null);
 
+  // Remote results fetched from the search endpoint
+  const [remote, setRemote] = useState<DisplayLocation[]>([]);
+  const [remoteLoading, setRemoteLoading] = useState(false);
+  const [remoteError, setRemoteError] = useState<string | null>(null);
+
   const wrapperRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
+  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const requestSeq = useRef(0);
 
   useEffect(() => {
     setQuery(value);
@@ -54,15 +111,62 @@ export function LocationCombobox({
     return () => document.removeEventListener("mousedown", onDocClick);
   }, []);
 
-  // Get ALL matching locations (already deduped + sorted in searchLocations)
-  const results = useMemo(() => searchLocations(query, 9999), [query]);
+  // Synchronous local filter over the hardcoded list. Runs on every
+  // keystroke, gives instant feedback while the remote search is debouncing.
+  const localResults = useMemo<DisplayLocation[]>(() => {
+    const local = searchLocalLocations(query, 9999);
+    return local.map(fromHardcoded);
+  }, [query]);
 
-  // Reset highlight when query changes
+  // Debounced remote search. Fires DEBOUNCE_MS after the last keystroke,
+  // and cancels any in-flight debounce when the query changes.
+  useEffect(() => {
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
+
+    const trimmed = query.trim();
+    if (trimmed.length < 2) {
+      setRemote([]);
+      setRemoteLoading(false);
+      setRemoteError(null);
+      return;
+    }
+
+    setRemoteLoading(true);
+    const mySeq = ++requestSeq.current;
+    debounceTimer.current = setTimeout(async () => {
+      try {
+        const found = await searchRemoteLocations(trimmed);
+        // Discard the response if a newer request has been issued
+        if (mySeq !== requestSeq.current) return;
+        setRemote(found.map(fromRemote));
+        setRemoteError(null);
+      } catch (e: any) {
+        if (mySeq !== requestSeq.current) return;
+        setRemoteError(e?.message ?? "Search failed");
+        setRemote([]);
+      } finally {
+        if (mySeq === requestSeq.current) setRemoteLoading(false);
+      }
+    }, DEBOUNCE_MS);
+
+    return () => {
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    };
+  }, [query]);
+
+  // The visible dropdown list: local + remote, deduplicated by name.
+  const results = useMemo<DisplayLocation[]>(() => {
+    if (query.trim().length < 2) {
+      // No query — show the top of the hardcoded list as a starting menu
+      return BOTSWANA_LOCATIONS.slice(0, 20).map(fromHardcoded);
+    }
+    return mergeUnique(localResults, remote);
+  }, [query, localResults, remote]);
+
   useEffect(() => {
     setHighlight(0);
   }, [query]);
 
-  // Scroll highlighted item into view when navigating with keyboard
   useEffect(() => {
     if (!open || !listRef.current) return;
     const item = listRef.current.children[highlight] as HTMLElement | undefined;
@@ -71,7 +175,7 @@ export function LocationCombobox({
     }
   }, [highlight, open]);
 
-  const handleSelect = (loc: BotswanaLocation) => {
+  const handleSelect = (loc: DisplayLocation) => {
     onChange(loc.name);
     setQuery(loc.name);
     setOpen(false);
@@ -209,11 +313,14 @@ export function LocationCombobox({
         <div className="absolute left-0 right-0 top-full z-[9999] mt-1 overflow-hidden rounded-lg border border-neutral-700 bg-neutral-900 shadow-2xl">
           {results.length === 0 ? (
             <div className="px-3 py-4 text-center text-sm text-neutral-500">
-              No locations found for "{query}"
+              {remoteLoading
+                ? "Searching…"
+                : remoteError
+                ? `Search unavailable: ${remoteError}`
+                : `No locations found for "${query}"`}
             </div>
           ) : (
             <>
-              {/* Fixed-height scrollable list — shows 8 items, scrolls for the rest */}
               <ul
                 ref={listRef}
                 role="listbox"
@@ -222,7 +329,7 @@ export function LocationCombobox({
               >
                 {results.map((loc, i) => (
                   <li
-                    key={loc.name}
+                    key={loc.name + i}
                     role="option"
                     aria-selected={i === highlight}
                     onMouseEnter={() => setHighlight(i)}
@@ -238,15 +345,26 @@ export function LocationCombobox({
                   >
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-medium">{loc.name}</span>
-                      <span className="text-xs text-neutral-500">
-                        {loc.region}
-                      </span>
+                      {loc.region && (
+                        <span className="text-xs text-neutral-500">
+                          {loc.region}
+                        </span>
+                      )}
                     </div>
                   </li>
                 ))}
               </ul>
-              <div className="border-t border-neutral-800 px-3 py-1.5 text-[10px] text-neutral-500">
-                {results.length} result{results.length === 1 ? "" : "s"} · scroll for more
+              <div className="flex items-center justify-between border-t border-neutral-800 px-3 py-1.5 text-[10px] text-neutral-500">
+                <span>
+                  {results.length} result{results.length === 1 ? "" : "s"} · scroll
+                  for more
+                </span>
+                {remoteLoading && (
+                  <span className="flex items-center gap-1">
+                    <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                    searching
+                  </span>
+                )}
               </div>
             </>
           )}

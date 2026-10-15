@@ -933,7 +933,7 @@ serve(async (req: Request) => {
 
                 geocodeResults = (json.results ?? [])
                   .filter((r) => r.geometry)
-                  .map((r) => {
+                                    .map((r) => {
                     const c = r.components ?? {};
                     const primary =
                       c.village ??
@@ -944,14 +944,21 @@ serve(async (req: Request) => {
                       r.formatted?.split(",")[0]?.trim() ??
                       q;
                     const region = c.county ?? c.state ?? null;
+                    const type = (c._type ?? "").toLowerCase();
+                    const isCountry =
+                      type === "country" ||
+                      primary.trim().toLowerCase() === "botswana";
                     return {
                       name: primary,
                       region,
                       lat: r.geometry!.lat,
                       lng: r.geometry!.lng,
                       source: "forward_geocode" as const,
+                      __isCountry: isCountry,
                     };
                   })
+                  .filter((r) => !r.__isCountry)
+                  .map(({ __isCountry, ...rest }) => rest)
                   .filter(
                     (r, i, arr) =>
                       arr.findIndex(

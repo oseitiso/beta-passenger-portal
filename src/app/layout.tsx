@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import { SentryInit } from "@/components/SentryInit";
 
 export const metadata: Metadata = {
   title: "B-ETA — Live Buses",
@@ -32,6 +33,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="antialiased bg-neutral-950 text-neutral-100">
+        <SentryInit />
         {children}
       </body>
     </html>
