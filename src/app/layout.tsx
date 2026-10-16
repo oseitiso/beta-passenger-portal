@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { SentryInit } from "@/components/SentryInit";
+import { InstallPrompt } from "@/components/InstallPrompt";
 
 export const metadata: Metadata = {
   title: "B-ETA — Live Buses",
@@ -34,6 +35,7 @@ export default function RootLayout({
     <html lang="en">
       <body className="antialiased bg-neutral-950 text-neutral-100">
         <SentryInit />
+        <InstallPrompt />
         {children}
       </body>
     </html>
