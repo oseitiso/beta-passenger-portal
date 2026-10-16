@@ -1,6 +1,6 @@
-"use client";
+﻿"use client";
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Sentry init for the passenger portal.
 //
 // The standard @sentry/nextjs auto-instrumentation path is unreliable on
@@ -8,10 +8,10 @@
 // the GlobalHandlers integration, so window.onerror is never hooked and
 // uncaught errors are silently dropped.
 //
-// This module init runs the moment the client bundle evaluates — before
-// React hydrates — which is early enough for Sentry to install its full
+// This module init runs the moment the client bundle evaluates â€” before
+// React hydrates â€” which is early enough for Sentry to install its full
 // integration set including GlobalHandlers.
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 import * as Sentry from "@sentry/nextjs";
 
@@ -21,7 +21,6 @@ if (typeof window !== "undefined") {
     environment: process.env.NODE_ENV,
 
     tracesSampleRate: 0.1,
-    debug: true,
 
     // Explicitly name the integrations we depend on. This guarantees
     // GlobalHandlers is attached even if the default list is trimmed.
