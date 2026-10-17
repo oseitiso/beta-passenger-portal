@@ -24,3 +24,19 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* ---- Mobile bottom nav: visible only on small screens ---- */
+@media (max-width: 767px) {
+  .mobile-nav {
+    display: block !important;
+  }
+  body {
+    padding-bottom: 60px;
+  }
+}
+
+@media (min-width: 768px) {
+  .mobile-nav {
+    display: none !important;
+  }
+}

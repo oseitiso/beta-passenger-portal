@@ -18,6 +18,7 @@ import {
   History,
   ChevronDown,
   ChevronUp,
+  AlertTriangle,
 } from "lucide-react";
 import {
   getActiveBooking,
@@ -342,6 +343,7 @@ export default function MyBookingPage() {
             )}
 
             {(booking.handoff_status === "CANCELLED" ||
+              booking.handoff_status === "DISRUPTED" ||
               booking.handoff_status === "EXPIRED" ||
               booking.handoff_status === "DECLINED" ||
               booking.handoff_status === "NO_SHOW" ||
@@ -391,7 +393,7 @@ export default function MyBookingPage() {
   );
 }
 
-// ─── Recent trip row (expandable) ─────────────────────────────────────────
+// ——— Recent trip row (expandable) —————————————————————————————————————————
 
 function RecentTripRow({ entry }: { entry: BookingHistoryEntry }) {
   const [open, setOpen] = useState(false);
@@ -489,7 +491,7 @@ function RecentTripRow({ entry }: { entry: BookingHistoryEntry }) {
   );
 }
 
-// ─── Status banner (unchanged) ────────────────────────────────────────────
+// ——— Status banner (updated) ————————————————————————————————————————————————
 
 function StatusBanner({
   booking,
@@ -571,16 +573,33 @@ function StatusBanner({
     );
   }
 
+  // NEW: Handle DISRUPTED status explicitly
+  if (status === "DISRUPTED") {
+    return (
+      <div className="flex items-start gap-3 rounded-xl border border-orange-900/40 bg-orange-950/30 p-4">
+        <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-orange-400" />
+        <div className="flex-1">
+          <div className="text-sm font-semibold text-orange-200">
+            Trip disrupted
+          </div>
+          <div className="mt-1 text-xs text-orange-300/70">
+            Your trip has been disrupted. You can now book another bus.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (status === "CANCELLED") {
     return (
-      <div className="flex items-start gap-3 rounded-xl border border-neutral-800 bg-neutral-900/30 p-4">
-        <X className="mt-0.5 h-5 w-5 flex-shrink-0 text-neutral-400" />
+      <div className="flex items-start gap-3 rounded-xl border border-orange-900/40 bg-orange-950/30 p-4">
+        <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-orange-400" />
         <div className="flex-1">
-          <div className="text-sm font-semibold text-neutral-200">
-            Booking cancelled
+          <div className="text-sm font-semibold text-orange-200">
+            Trip cancelled
           </div>
-          <div className="mt-1 text-xs text-neutral-500">
-            You can request another seat on the map.
+          <div className="mt-1 text-xs text-orange-300/70">
+            This trip has been cancelled. You can now book another bus.
           </div>
         </div>
       </div>
@@ -656,7 +675,7 @@ function StatusBanner({
   return null;
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────
+// ——— Helpers ————————————————————————————————————————————————————————————————
 
 function statusLabel(status: string): { label: string; colorClass: string } {
   switch (status) {

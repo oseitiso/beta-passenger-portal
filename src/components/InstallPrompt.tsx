@@ -1,20 +1,22 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
 import { Download, X, Share, Plus } from "lucide-react";
 
-// The browser fires this event before showing its own install prompt.
-// We capture it and fire it manually when the user taps our button.
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
 };
 
 const VISITS_KEY = "beta-eta-visits";
+const PROMPT_STATE_KEY = "beta-eta-prompt-state";
 const DISMISS_KEY = "beta-eta-install-dismissed-at";
+const SESSION_DISMISS_KEY = "beta-eta-install-dismissed-session";
 const DISMISS_DAYS = 7;
 
 export function InstallPrompt() {
+  const pathname = usePathname();
   const [mode, setMode] = useState<"hidden" | "android" | "ios">("hidden");
   const [deferredPrompt, setDeferredPrompt] =
     useState<BeforeInstallPromptEvent | null>(null);
@@ -22,24 +24,36 @@ export function InstallPrompt() {
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    // Already installed? Hide permanently.
     const nav = window.navigator as Navigator & { standalone?: boolean };
     if (window.matchMedia("(display-mode: standalone)").matches || nav.standalone) {
+      setMode("hidden");
       return;
     }
 
-    // Dismissed recently? Skip.
+    if (sessionStorage.getItem(SESSION_DISMISS_KEY) === "1") {
+      setMode("hidden");
+      return;
+    }
+
     const dismissedAt = Number(localStorage.getItem(DISMISS_KEY) ?? 0);
     if (dismissedAt && Date.now() - dismissedAt < DISMISS_DAYS * 86400_000) {
+      setMode("hidden");
       return;
     }
 
-    // Track visits. Show on the second and later.
     const visits = Number(localStorage.getItem(VISITS_KEY) ?? 0) + 1;
     localStorage.setItem(VISITS_KEY, String(visits));
-    if (visits < 2) return;
+    if (visits < 2) {
+      setMode("hidden");
+      return;
+    }
 
-    // Detect iOS Safari — no install event on iOS, needs instructions.
+    const savedMode = sessionStorage.getItem(PROMPT_STATE_KEY);
+    if (savedMode === "android" || savedMode === "ios") {
+      setMode(savedMode);
+      return;
+    }
+
     const ua = window.navigator.userAgent;
     const isIOS =
       /iPad|iPhone|iPod/.test(ua) &&
@@ -48,19 +62,30 @@ export function InstallPrompt() {
 
     if (isIOS && !isStandalone) {
       setMode("ios");
+      sessionStorage.setItem(PROMPT_STATE_KEY, "ios");
       return;
     }
+  }, [pathname]);
 
-    // Android / Chrome path — wait for the native event.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
     const onPrompt = (e: Event) => {
       e.preventDefault();
       setDeferredPrompt(e as BeforeInstallPromptEvent);
-      setMode("android");
+      setMode((prev) => (prev === "hidden" ? "android" : prev));
+      if (!sessionStorage.getItem(PROMPT_STATE_KEY)) {
+        sessionStorage.setItem(PROMPT_STATE_KEY, "android");
+      }
+    };
+
+    const onInstalled = () => {
+      sessionStorage.removeItem(PROMPT_STATE_KEY);
+      sessionStorage.removeItem(SESSION_DISMISS_KEY);
+      setMode("hidden");
     };
 
     window.addEventListener("beforeinstallprompt", onPrompt);
-
-    const onInstalled = () => setMode("hidden");
     window.addEventListener("appinstalled", onInstalled);
 
     return () => {
@@ -71,6 +96,8 @@ export function InstallPrompt() {
 
   function dismiss() {
     localStorage.setItem(DISMISS_KEY, String(Date.now()));
+    sessionStorage.setItem(SESSION_DISMISS_KEY, "1");
+    sessionStorage.removeItem(PROMPT_STATE_KEY);
     setMode("hidden");
   }
 
@@ -79,6 +106,8 @@ export function InstallPrompt() {
     await deferredPrompt.prompt();
     const choice = await deferredPrompt.userChoice;
     if (choice.outcome === "accepted") {
+      sessionStorage.removeItem(PROMPT_STATE_KEY);
+      sessionStorage.removeItem(SESSION_DISMISS_KEY);
       setMode("hidden");
     }
     setDeferredPrompt(null);
@@ -87,7 +116,7 @@ export function InstallPrompt() {
   if (mode === "hidden") return null;
 
   return (
-    <div className="fixed bottom-4 left-4 right-4 z-50 max-w-md mx-auto">
+    <div className="fixed bottom-4 left-4 right-4 z-50 max-w-md mx-auto animate-in slide-in-from-bottom-4 duration-300">
       <div className="bg-neutral-900 border border-neutral-800 rounded-xl shadow-2xl p-4">
         <div className="flex items-start gap-3">
           <div className="w-10 h-10 rounded-lg bg-orange-500/20 flex items-center justify-center shrink-0">
