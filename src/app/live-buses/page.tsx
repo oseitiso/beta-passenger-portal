@@ -8,6 +8,7 @@ import {
   type PublicBus,
 } from "@/lib/passengerApi";
 import { BusList } from "@/components/map/BusList";
+import { BusDetailDrawer } from "@/components/map/BusDetailDrawer";
 import {
   getActiveBooking,
   getBookingStatus,
@@ -21,6 +22,7 @@ export default function LiveBusesPage() {
   const [activeBooking, setActiveBooking] = useState<BookingDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [selectedBusState, setSelectedBusState] = useState<PublicBus | null>(null);
 
       const load = useCallback(async () => {
     setRefreshing(true);
@@ -96,14 +98,21 @@ export default function LiveBusesPage() {
             buses={buses}
             selectedBusId={null}
             activeBooking={activeBooking}
-            onSelectBus={(bus) => {
-              router.push(`/map?selected=${encodeURIComponent(bus.trip_id)}`);
-            }}
+            onSelectBus={(bus) => setSelectedBusState(bus)}
             onCancelBooking={handleCancelBooking}
             loading={loading}
           />
         )}
       </div>
+      {selectedBusState && (
+        <BusDetailDrawer
+          bus={selectedBusState}
+          onClose={() => setSelectedBusState(null)}
+          onCenter={(bus) => {
+            window.location.href = `/map?selected=${encodeURIComponent(bus.trip_id)}`;
+          }}
+        />
+      )}
     </div>
   );
 }
