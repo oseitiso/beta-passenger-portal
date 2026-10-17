@@ -25,7 +25,6 @@ export default function Home() {
         </Link>
 
         <p className="text-[10px] uppercase tracking-widest text-neutral-700 mt-12">
-          Passenger Portal — Phase P2
         </p>
       </div>
     </main>
