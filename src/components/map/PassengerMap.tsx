@@ -34,6 +34,10 @@ interface PassengerMapProps {
   /** Toggle visibility of route lines and stops */
   showRoutes?: boolean;
   showStops?: boolean;
+  /** Trip ID of the bus the passenger has booked, if any. */
+  bookedTripId?: string | null;
+  /** Marker colour state for the booked bus. */
+  bookedState?: "accepted" | "picked_up" | null;
 }
 
 const DEFAULT_CENTER: [number, number] = [-24.6282, 25.9231];
@@ -90,6 +94,8 @@ export function PassengerMap({
   dimNonMatching = false,
   showRoutes = true,
   showStops = true,
+  bookedTripId = null,
+  bookedState = null,
 }: PassengerMapProps) {
   return (
     <MapContainer
@@ -106,24 +112,24 @@ export function PassengerMap({
         maxZoom={19}
       />
 
-      {/* Route lines (drawn first, so they sit under markers) */}
       {showRoutes &&
         routes.map((route) => (
           <RouteLine key={route.route_id} route={route} />
         ))}
 
-      {/* Stop markers (small dots) */}
       {showStops &&
         stops.map((stop) => <StopMarker key={stop.id} stop={stop} />)}
 
       <MapFocusController bus={focusBus} />
       <MapResizeController layoutKey={layoutKey} />
 
-      {/* Buses (on top of everything) */}
       {buses.map((bus) => {
         const isSelected = bus.trip_id === selectedBusId;
         const isMatching = !matchingBusIds || matchingBusIds.has(bus.trip_id);
         const dimmed = Boolean(dimNonMatching && matchingBusIds && !isMatching);
+
+        const markerBookingState =
+          bookedTripId && bus.trip_id === bookedTripId ? bookedState : null;
 
         return (
           <BusMarker
@@ -131,6 +137,7 @@ export function PassengerMap({
             bus={bus}
             selected={isSelected}
             dimmed={dimmed}
+            bookingState={markerBookingState}
             onSelect={onSelectBus}
           />
         );

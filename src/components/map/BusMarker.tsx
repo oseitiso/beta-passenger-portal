@@ -6,31 +6,65 @@ import L from "leaflet";
 import type { PublicBus } from "@/lib/passengerApi";
 import { reverseGeocode } from "@/lib/geo";
 
+export type BookingMarkerState = "accepted" | "picked_up" | null;
+
 interface BusMarkerProps {
   bus: PublicBus;
   selected: boolean;
   dimmed?: boolean;
+  bookingState?: BookingMarkerState;
   onSelect: (bus: PublicBus) => void;
 }
 
-const createBusIcon = (selected: boolean, dimmed: boolean) => {
+const createBusIcon = (
+  selected: boolean,
+  dimmed: boolean,
+  bookingState: BookingMarkerState = null
+) => {
   const opacity = dimmed ? "0.35" : "1";
-  const bg = dimmed ? "#525252" : selected ? "#f97316" : "#ea580c";
-  const border = dimmed ? "#404040" : selected ? "#fff" : "#f97316";
 
-  const pulseHtml = selected
-    ? `
+  // Booking state wins over selection colour so the passenger can always
+  // find their own bus. Terminal states fall back to the normal colour.
+  let bg: string;
+  let border: string;
+  let pulseColour: string;
+
+  if (bookingState === "picked_up") {
+    bg = "#3b82f6";
+    border = "#fff";
+    pulseColour = "#60a5fa";
+  } else if (bookingState === "accepted") {
+    bg = "#22c55e";
+    border = "#fff";
+    pulseColour = "#4ade80";
+  } else if (dimmed) {
+    bg = "#525252";
+    border = "#404040";
+    pulseColour = "#525252";
+  } else if (selected) {
+    bg = "#f97316";
+    border = "#fff";
+    pulseColour = "#f97316";
+  } else {
+    bg = "#ea580c";
+    border = "#f97316";
+    pulseColour = "#ea580c";
+  }
+
+  const pulseHtml =
+    selected || bookingState
+      ? `
       <span style="
         position: absolute;
         inset: -6px;
         border-radius: 50%;
-        background: #f97316;
+        background: ${pulseColour};
         opacity: 0.5;
         animation: busPulse 1.5s ease-out infinite;
         pointer-events: none;
       "></span>
     `
-    : "";
+      : "";
 
   return L.divIcon({
     className: "",
@@ -108,12 +142,9 @@ export function BusMarker({
   bus,
   selected,
   dimmed = false,
+  bookingState = null,
   onSelect,
 }: BusMarkerProps) {
-  // ─── ALL HOOKS MUST BE AT THE TOP ───
-  // React requires the same number of hooks on every render. Never call
-  // hooks after a conditional return.
-
   const [, setTick] = useState(0);
   useEffect(() => {
     const t = setInterval(() => setTick((v) => v + 1), 1000);
@@ -139,10 +170,6 @@ export function BusMarker({
     };
   }, [lat, lng]);
 
-  // ─── END OF HOOKS ───
-  // Everything below this line can include early returns safely.
-
-  // Skip markers whose GPS is older than 2 minutes
   const MAX_AGE_MS = 5 * 60 * 1000;
   const lastPos = bus.live?.last_position_at;
   if (lastPos) {
@@ -167,7 +194,7 @@ export function BusMarker({
   return (
     <Marker
       position={[lat, lng]}
-      icon={createBusIcon(selected, dimmed)}
+      icon={createBusIcon(selected, dimmed, bookingState)}
       eventHandlers={{
         click: () => onSelect(bus),
       }}

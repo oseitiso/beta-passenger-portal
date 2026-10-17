@@ -358,6 +358,7 @@ function LocationSelect({
     </div>
   );
 }
+
 export default function MapPage() {
   const [buses, setBuses] = useState<PublicBus[]>([]);
   const [loading, setLoading] = useState(true);
@@ -381,13 +382,10 @@ export default function MapPage() {
   const [filterHovered, setFilterHovered] = useState(false);
   const [, setTick] = useState(0);
 
-  // -- Lazy initializer: read localStorage synchronously on first render --
-  // This prevents the sidebar from flickering through the empty state when
-  // the user already has an active booking on page load.
   const [activeBooking, setActiveBooking] = useState<BookingDetail | null>(
     () => {
       if (typeof window === "undefined") return null;
-      return null; // hydrated after mount - see hydration effect below
+      return null;
     }
   );
   const [recentlyEndedBooking, setRecentlyEndedBooking] =
@@ -452,7 +450,6 @@ export default function MapPage() {
           terminalStatuses.includes(result.booking.handoff_status) ||
           isDisrupted
         ) {
-          // Persist to history BEFORE clearing the active slot
           appendBookingHistory({
             handoff_id: result.booking.handoff_id,
             booking_reference: result.booking.booking_reference,
@@ -585,6 +582,28 @@ export default function MapPage() {
     setActiveBooking(null);
   };
 
+  // Derive booking marker state.
+  // Matches by trip_code (what BusList uses), with fallback to trip_id.
+  const bookedBus = useMemo(() => {
+    if (!activeBooking) return null;
+    return (
+      buses.find(
+        (b) =>
+          b.trip_code === activeBooking.trip_code ||
+          (activeBooking as any).trip_id === b.trip_id
+      ) ?? null
+    );
+  }, [buses, activeBooking]);
+
+  const bookedTripId = bookedBus?.trip_id ?? null;
+
+  const bookedState: "accepted" | "picked_up" | null = useMemo(() => {
+    if (!activeBooking) return null;
+    if (activeBooking.handoff_status === "ACCEPTED") return "accepted";
+    if (activeBooking.handoff_status === "PICKED_UP") return "picked_up";
+    return null;
+  }, [activeBooking]);
+
   const secondsAgo = lastUpdated
     ? Math.floor((Date.now() - lastUpdated.getTime()) / 1000)
     : null;
@@ -644,6 +663,8 @@ export default function MapPage() {
             buses={buses}
             selectedBusId={selectedBusId}
             onSelectBus={handleSelectBus}
+            bookedTripId={bookedTripId}
+            bookedState={bookedState}
           />
 
           <div
