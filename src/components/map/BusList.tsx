@@ -29,7 +29,7 @@ interface BusListProps {
 }
 
 function timeSince(iso: string | null | undefined): string {
-  if (!iso) return "—";
+  if (!iso) return "-";
   const seconds = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
   if (seconds < 10) return "now";
   if (seconds < 60) return `${seconds}s`;
@@ -134,7 +134,7 @@ export function BusList({
   if (isColdStart && !activeBooking && !recentlyEndedBooking) {
     return (
       <div className="flex h-full items-center justify-center p-6 text-sm text-neutral-500">
-        Loading buses…
+        Loading buses...
       </div>
     );
   }
@@ -171,7 +171,7 @@ export function BusList({
             {(activeBooking || recentlyEndedBooking) && (
               <p className="mt-1 text-xs text-neutral-600">
                 {activeBooking
-                  ? "Your booking is still active — see receipt above"
+                  ? "Your booking is still active - see receipt above"
                   : "Your recent trip is shown above"}
               </p>
             )}
@@ -184,8 +184,9 @@ export function BusList({
               const passengers = bus.vehicle?.passenger_count ?? 0;
               const capacity = bus.vehicle?.capacity;
               const plate = bus.vehicle?.registration_plate ?? "Unknown";
-              const origin = bus.route?.origin ?? "—";
-              const destination = bus.route?.destination ?? "—";
+              const origin = bus.route?.origin ?? "-";
+              const destination = bus.route?.destination ?? "-";
+              const routeName = bus.route?.name ?? "Unnamed route";
               const tripCode = bus.trip_code ?? bus.trip_id.slice(0, 8);
               const lastSeen = timeSince(bus.live?.last_position_at);
               const isBookingBus = bus.trip_id === bookingBus?.trip_id;
@@ -213,9 +214,26 @@ export function BusList({
                         >
                           <Bus className="h-3.5 w-3.5" />
                         </div>
-                        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-neutral-100">
-                          {plate}
-                        </span>
+                        
+                        {/* Registration Plate & Color Box */}
+                        <div className="min-w-0 flex-1 flex flex-col items-start">
+                          <div className="flex items-center gap-2">
+                            {bus.vehicle?.color && (
+                              <div 
+                                className="h-3.5 w-3.5 rounded-full border border-neutral-600 shadow-sm" 
+                                style={{ backgroundColor: bus.vehicle.color }}
+                                title={`Color: ${bus.vehicle.color}`}
+                              />
+                            )}
+                            <span className="rounded bg-blue-600 px-1.5 py-0.5 text-xs font-bold tracking-widest text-white shadow-sm">
+                              {plate}
+                            </span>
+                          </div>
+                          <span className="truncate text-[11px] font-medium text-neutral-400 mt-1">
+                            {routeName}
+                          </span>
+                        </div>
+
                         <span className="flex flex-shrink-0 items-center gap-1 text-xs text-neutral-400">
                           <Gauge className="h-3 w-3" />
                           {speed}
@@ -225,8 +243,8 @@ export function BusList({
                         </span>
                       </div>
 
-                      <div className="mt-1.5 truncate text-xs text-neutral-300">
-                        {origin} <span className="text-neutral-600">→</span>{" "}
+                      <div className="mt-2 truncate text-xs text-neutral-400">
+                        {origin} <span className="text-neutral-600">&rarr;</span>{" "}
                         {destination}
                       </div>
 
@@ -267,13 +285,13 @@ function EndedBanner({ booking }: { booking: BookingDetail }) {
     }
     switch (booking.handoff_status) {
       case "COMPLETED":
-        return `Trip completed — you arrived at ${destination}`;
+        return `Trip completed - you arrived at ${destination}`;
       case "EXPIRED":
         return "Booking expired before the driver accepted it";
       case "CANCELLED":
         return "This booking was cancelled";
       case "NO_SHOW":
-        return "Marked as no-show — the driver didn't find you";
+        return "Marked as no-show - the driver didn't find you";
       case "DECLINED":
         return "Driver declined this request";
       default:
@@ -434,7 +452,7 @@ function BookingReceipt({
             <>
               <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0 text-green-300" />
               <span className="text-green-300">
-                On board — you&apos;ll be dropped at {destination}
+                On board - you&apos;ll be dropped at {destination}
               </span>
             </>
           ) : booking.handoff_status === "MISSED" ? (
@@ -443,7 +461,7 @@ function BookingReceipt({
               <span className="text-amber-300">
                 Driver didn&apos;t arrive
                 {booking.pickup_missed_reason
-                  ? ` — ${booking.pickup_missed_reason}`
+                  ? ` - ${booking.pickup_missed_reason}`
                   : ""}
               </span>
             </>
@@ -497,7 +515,7 @@ function BookingReceipt({
               <div className="mt-1 text-sm text-green-200">
                 {boardedMessageSwapped
                   ? `You are now boarded to ${destination}`
-                  : "PIN verified — enjoy your trip"}
+                  : "PIN verified - enjoy your trip"}
               </div>
             </div>
           )}
@@ -508,13 +526,13 @@ function BookingReceipt({
                 From
               </div>
               <div className="truncate text-neutral-200">
-                {booking.from_stop_name ?? booking.route_origin ?? "—"}
+                {booking.from_stop_name ?? booking.route_origin ?? "-"}
               </div>
             </div>
             <div>
               <div className="text-[10px] uppercase text-neutral-500">To</div>
               <div className="truncate text-neutral-200">
-                {booking.to_stop_name ?? booking.route_destination ?? "—"}
+                {booking.to_stop_name ?? booking.route_destination ?? "-"}
               </div>
             </div>
             <div>
@@ -528,7 +546,7 @@ function BookingReceipt({
                 Name
               </div>
               <div className="truncate text-neutral-200">
-                {booking.passenger_name ?? "—"}
+                {booking.passenger_name ?? "-"}
               </div>
             </div>
           </div>
@@ -542,7 +560,7 @@ function BookingReceipt({
               {cancelling ? (
                 <>
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  Cancelling…
+                  Cancelling...
                 </>
               ) : (
                 <>

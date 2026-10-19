@@ -44,8 +44,21 @@ export interface PublicBus {
     distance_remaining_km: number | null;
     eta_minutes: number | null;
   };
+  matched_track?: {
+    paths: [number, number][][];
+    confidence: number;
+    matched_at: string;
+    source_recorded_at: string;
+  } | null;
+  /** Display-only point; `live` remains the API's raw fix for ETA/booking calculations. */
+  map_position?: {
+    latitude: number;
+    longitude: number;
+    source: "road-matched";
+  } | null;
   vehicle: {
     registration_plate: string;
+    color: string | null;
     capacity: number | null;
     passenger_count: number;
   };

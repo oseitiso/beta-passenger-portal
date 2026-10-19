@@ -19,6 +19,7 @@ import type {
 } from "@/lib/routesApi";
 import { BusMarker } from "./BusMarker";
 import { RouteLine } from "./RouteLine";
+import { MatchedTrackLine } from "./MatchedTrackLine";
 import { StopMarker } from "./StopMarker";
 
 interface PassengerMapProps {
@@ -29,30 +30,32 @@ interface PassengerMapProps {
   selectedBusId: string | null;
   onSelectBus: (bus: PublicBus) => void;
   focusBus?: PublicBus | null;
+  focusVersion?: number;
   layoutKey?: string | number;
   dimNonMatching?: boolean;
-  /** Toggle visibility of route lines and stops */
   showRoutes?: boolean;
   showStops?: boolean;
-  /** Trip ID of the bus the passenger has booked, if any. */
   bookedTripId?: string | null;
-  /** Marker colour state for the booked bus. */
   bookedState?: "accepted" | "picked_up" | null;
 }
 
 const DEFAULT_CENTER: [number, number] = [-24.6282, 25.9231];
 const DEFAULT_ZOOM = 6;
 
-function MapFocusController({ bus }: { bus: PublicBus | null | undefined }) {
+function MapFocusController({ bus, focusVersion }: { bus: PublicBus | null | undefined; focusVersion?: number }) {
   const map = useMap();
+  const busRef = useRef(bus);
+
+  useEffect(() => { busRef.current = bus; }, [bus]);
 
   useEffect(() => {
-    if (!bus) return;
-    const lat = bus.live?.latitude;
-    const lng = bus.live?.longitude;
+    const target = busRef.current;
+    if (!target) return;
+    const lat = target.map_position?.latitude ?? target.live?.latitude;
+    const lng = target.map_position?.longitude ?? target.live?.longitude;
     if (lat == null || lng == null) return;
     map.flyTo([lat, lng], 13, { duration: 1.2 });
-  }, [bus, map]);
+  }, [bus?.map_position?.latitude, bus?.map_position?.longitude, focusVersion, map]);
 
   return null;
 }
@@ -90,6 +93,7 @@ export function PassengerMap({
   selectedBusId,
   onSelectBus,
   focusBus,
+  focusVersion,
   layoutKey,
   dimNonMatching = false,
   showRoutes = true,
@@ -120,7 +124,11 @@ export function PassengerMap({
       {showStops &&
         stops.map((stop) => <StopMarker key={stop.id} stop={stop} />)}
 
-      <MapFocusController bus={focusBus} />
+      {buses.map((bus) => bus.matched_track?.paths?.map((path, index) => (
+        <MatchedTrackLine key={`${bus.trip_id}-${index}`} positions={path} />
+      )))}
+
+      <MapFocusController bus={focusBus} focusVersion={focusVersion} />
       <MapResizeController layoutKey={layoutKey} />
 
       {buses.map((bus) => {

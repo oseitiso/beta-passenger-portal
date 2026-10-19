@@ -10,6 +10,7 @@ import {
   Search,
   X,
   Loader2,
+  BellRing,
 } from "lucide-react";
 import {
   getActiveBuses,
@@ -17,7 +18,7 @@ import {
   type PublicBus,
   type SearchedLocation,
 } from "@/lib/passengerApi";
-import { subscribeToVehicleState } from "@/lib/realtime";
+import { getMatchedTracks, subscribeToPassengerMapChanges, type MatchedTrack } from "@/lib/realtime";
 import {
   BOTSWANA_LOCATIONS,
   type BotswanaLocation,
@@ -361,15 +362,33 @@ function LocationSelect({
 
 export default function MapPage() {
   const [buses, setBuses] = useState<PublicBus[]>([]);
+  const [matchedTracks, setMatchedTracks] = useState<Record<string, MatchedTrack>>({});
+  const [focusVersion, setFocusVersion] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedBusId, setSelectedBusId] = useState<string | null>(null);
-  const selectedBus = useMemo(
-    () =>
-      selectedBusId
-        ? buses.find((b) => b.trip_id === selectedBusId) ?? null
+  const busesWithMatchedTracks = useMemo(() => buses.map((bus) => {
+    const track = matchedTracks[bus.trip_id];
+    const sourceAt = track ? new Date(track.source_recorded_at).getTime() : NaN;
+    const rawAt = bus.live?.last_position_at ? new Date(bus.live.last_position_at).getTime() : NaN;
+    const recent = track && Number.isFinite(sourceAt) &&
+      Date.now() - sourceAt < 90_000 &&
+      (!Number.isFinite(rawAt) || rawAt - sourceAt < 90_000);
+    return {
+      ...bus,
+      matched_track: recent && track.confidence >= 0.5
+        ? { paths: track.paths, confidence: track.confidence, matched_at: track.matched_at, source_recorded_at: track.source_recorded_at }
         : null,
-    [buses, selectedBusId]
+      map_position: recent && track.confidence >= 0.5
+        ? { latitude: track.latest_latitude, longitude: track.latest_longitude, source: "road-matched" as const }
+        : null,
+    };
+  }), [buses, matchedTracks]);
+  const selectedBus = useMemo(
+    () => selectedBusId
+      ? busesWithMatchedTracks.find((b) => b.trip_id === selectedBusId) ?? null
+      : null,
+    [busesWithMatchedTracks, selectedBusId]
   );
   const [origin, setOrigin] = useState("");
   const [destination, setDestination] = useState("");
@@ -393,6 +412,53 @@ export default function MapPage() {
 
   const lastFetchRef = useRef<number>(0);
   const fetchRef = useRef<() => void>(() => {});
+
+  // --- PROXIMITY ALERTS ---
+  const [arrivalAlert, setArrivalAlert] = useState<"approaching" | "arrived" | null>(null);
+  const lastAlertRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!activeBooking || activeBooking.handoff_status !== "ACCEPTED") {
+      setArrivalAlert(null);
+      return;
+    }
+    const bus = buses.find((b) => b.trip_code === activeBooking.trip_code || b.trip_id === (activeBooking as any).trip_id);
+    if (!bus || !bus.live?.latitude || !bus.live?.longitude) return;
+
+    // Fallback to looking up the stop by ID from the bus's route stops
+    const fromStopId = activeBooking.from_stop_name 
+      ? bus.route?.stops.find((s) => s.name === activeBooking.from_stop_name)?.stop_id 
+      : null;
+      
+    const stop = bus.route?.stops.find((s) => s.stop_id === fromStopId || s.name === activeBooking.from_stop_name);
+    if (!stop || !stop.lat || !stop.lng) return;
+
+    // Haversine formula for straight-line distance
+    const R = 6371; // km
+    const dLat = (stop.lat - bus.live.latitude) * (Math.PI / 180);
+    const dLng = (stop.lng - bus.live.longitude) * (Math.PI / 180);
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+              Math.cos(bus.live.latitude * (Math.PI / 180)) * Math.cos(stop.lat * (Math.PI / 180)) *
+              Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    const distanceKm = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+    if (distanceKm <= 0.15) {
+      if (lastAlertRef.current !== "arrived") {
+        setArrivalAlert("arrived");
+        lastAlertRef.current = "arrived";
+        if ("vibrate" in navigator) navigator.vibrate([200, 100, 200]);
+      }
+    } else if (distanceKm <= 1.0) {
+      if (!lastAlertRef.current) {
+        setArrivalAlert("approaching");
+        lastAlertRef.current = "approaching";
+        if ("vibrate" in navigator) navigator.vibrate(200);
+      }
+    } else {
+      setArrivalAlert(null);
+      lastAlertRef.current = null;
+    }
+  }, [buses, activeBooking]);
 
   useEffect(() => {
     setMounted(true);
@@ -499,6 +565,15 @@ export default function MapPage() {
 
   useEffect(() => {
     if (!mounted) return;
+    let cancelled = false;
+    getMatchedTracks().then((rows: any[]) => {
+      if (!cancelled) setMatchedTracks(Object.fromEntries(rows.map((row: any) => [row.trip_id, row])));
+    }).catch((e: any) => console.warn("[gps-match] Could not load matched tracks", e));
+    return () => { cancelled = true; };
+  }, [mounted]);
+
+  useEffect(() => {
+    if (!mounted) return;
 
     refreshActiveBooking();
 
@@ -510,9 +585,25 @@ export default function MapPage() {
       refreshActiveBooking();
     };
 
-    const unsubscribe = subscribeToVehicleState(throttledFetch, (status) => {
+    const applyMatchedTrackChange = (row: MatchedTrack | null, tripId?: string) => {
+      if (!row || !tripId) {
+        getMatchedTracks().then((rows: any[]) => setMatchedTracks(Object.fromEntries(rows.map((item: any) => [item.trip_id, item]))))
+          .catch((e: any) => console.warn("[gps-match] Could not refresh matched tracks", e));
+        return;
+      }
+      setMatchedTracks((current) => {
+        const next = { ...current };
+        for (const [existingTripId, item] of Object.entries(next)) {
+          if (item.vehicle_id === row.vehicle_id) delete next[existingTripId];
+        }
+        next[tripId] = row;
+        return next;
+      });
+    };
+
+    const unsubscribe = subscribeToPassengerMapChanges(throttledFetch, applyMatchedTrackChange, (status: any) => {
       if (status === "SUBSCRIBED") {
-        console.log("[realtime] Subscribed to vehicle_current_state");
+        console.log("[realtime] Subscribed to passenger map updates");
       }
     });
 
@@ -532,6 +623,7 @@ export default function MapPage() {
 
   const handleSelectBus = (bus: PublicBus) => {
     setSelectedBusId(bus.trip_id);
+    setFocusVersion((version) => version + 1);
     logBusViewed(bus.trip_id, bus.route?.route_id ?? null);
   };
 
@@ -541,6 +633,7 @@ export default function MapPage() {
 
   const handleCenter = (bus: PublicBus) => {
     setSelectedBusId(bus.trip_id);
+    setFocusVersion((version) => version + 1);
   };
 
   const handleOpenBooking = (bus: PublicBus) => {
@@ -582,8 +675,6 @@ export default function MapPage() {
     setActiveBooking(null);
   };
 
-  // Derive booking marker state.
-  // Matches by trip_code (what BusList uses), with fallback to trip_id.
   const bookedBus = useMemo(() => {
     if (!activeBooking) return null;
     return (
@@ -607,6 +698,7 @@ export default function MapPage() {
   const secondsAgo = lastUpdated
     ? Math.floor((Date.now() - lastUpdated.getTime()) / 1000)
     : null;
+
   return (
     <div className="flex h-screen flex-col bg-neutral-950 text-neutral-100">
       <header className="flex items-center justify-between border-b border-neutral-800 bg-neutral-950 px-4 py-3">
@@ -643,11 +735,19 @@ export default function MapPage() {
         </div>
       </header>
 
+      {/* Proximity Alerts */}
+      {arrivalAlert && (
+        <div className={`absolute left-1/2 top-20 z-[2000] flex -translate-x-1/2 items-center gap-2 rounded-full px-4 py-2 text-sm font-bold text-white shadow-lg animate-bounce ${arrivalAlert === "arrived" ? "bg-green-600" : "bg-orange-600"}`}>
+          <BellRing className="h-4 w-4" />
+          {arrivalAlert === "arrived" ? "Bus is here! Wave it down." : "Bus approaching (1 km away)"}
+        </div>
+      )}
+
       <div className="flex flex-1 overflow-hidden">
         {!selectedBus && (
           <aside className="hidden w-80 flex-shrink-0 overflow-hidden border-r border-neutral-800 bg-neutral-950 lg:block">
             <BusList
-              buses={buses}
+              buses={busesWithMatchedTracks}
               selectedBusId={null}
               activeBooking={activeBooking}
               recentlyEndedBooking={recentlyEndedBooking}
@@ -660,9 +760,11 @@ export default function MapPage() {
 
         <main className="relative flex-1 overflow-hidden">
           <PassengerMap
-            buses={buses}
+            buses={busesWithMatchedTracks}
             selectedBusId={selectedBusId}
             onSelectBus={handleSelectBus}
+            focusBus={selectedBus}
+            focusVersion={focusVersion}
             bookedTripId={bookedTripId}
             bookedState={bookedState}
           />
@@ -744,13 +846,19 @@ export default function MapPage() {
       </div>
 
       {selectedBus && (
-        <div className="absolute inset-x-0 bottom-0 z-[1100] lg:hidden">
-          <BusDetailDrawer
-            bus={selectedBus}
-            onClose={handleCloseDetail}
-            onCenter={handleCenter}
-            onBookSeat={handleOpenBooking}
+        <div className="fixed inset-0 z-[1100] flex items-center justify-center p-4 lg:hidden">
+          <div 
+            className="absolute inset-0 bg-black/40 backdrop-blur-sm" 
+            onClick={handleCloseDetail} 
           />
+          <div className="relative w-full max-w-sm h-[80vh] rounded-2xl overflow-hidden shadow-2xl border border-neutral-700/50">
+            <BusDetailDrawer
+              bus={selectedBus}
+              onClose={handleCloseDetail}
+              onCenter={handleCenter}
+              onBookSeat={handleOpenBooking}
+            />
+          </div>
         </div>
       )}
 

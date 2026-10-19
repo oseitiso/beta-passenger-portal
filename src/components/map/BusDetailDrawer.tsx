@@ -81,8 +81,8 @@ export function BusDetailDrawer({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const lat = bus.live?.latitude;
-  const lng = bus.live?.longitude;
+  const lat = bus.map_position?.latitude ?? bus.live?.latitude;
+  const lng = bus.map_position?.longitude ?? bus.live?.longitude;
 
   // Reverse-geocode the bus's current position
   const [placeName, setPlaceName] = useState<string | null>(null);
@@ -102,8 +102,8 @@ export function BusDetailDrawer({
   }, [lat, lng]);
 
   const plate = bus.vehicle?.registration_plate ?? "Unknown";
-  const origin = bus.route?.origin ?? "—";
-  const destination = bus.route?.destination ?? "—";
+  const origin = bus.route?.origin ?? "Unknown";
+  const destination = bus.route?.destination ?? "Unknown";
   const routeName = bus.route?.name ?? "Unnamed route";
   const speed = Math.round(bus.live?.speed_kph ?? 0);
   const heading = Math.round(bus.live?.heading ?? 0);
@@ -131,18 +131,28 @@ export function BusDetailDrawer({
   return (
     <aside
       aria-label="Bus details"
-      className="flex h-full w-full flex-col overflow-y-auto border-l border-neutral-800 bg-neutral-950 lg:w-[380px]"
+      className="flex h-full w-full flex-col overflow-y-auto bg-neutral-900/95 backdrop-blur-xl lg:w-[380px] lg:border-l lg:border-neutral-800 lg:bg-neutral-950 lg:backdrop-blur-none"
     >
       {/* Header */}
-      <div className="flex flex-shrink-0 items-center justify-between border-b border-neutral-800 px-4 py-3">
-        <div className="flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-orange-600/20 text-orange-500">
-            <Bus className="h-4 w-4" />
+      <div className="flex flex-shrink-0 items-center justify-between border-b border-neutral-800 px-4 py-4">
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-orange-600/20 text-orange-500">
+            <Bus className="h-5 w-5" />
           </div>
           <div>
-            <div className="text-xs text-neutral-500">Live bus</div>
-            <div className="text-sm font-semibold text-neutral-100">
-              {plate}
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
+              Live bus
+            </div>
+            <div className="mt-1 flex items-center gap-2">
+              {bus.vehicle?.color && (
+                <div 
+                  className="h-4 w-4 rounded-full border border-neutral-600 shadow-sm" 
+                  style={{ backgroundColor: bus.vehicle.color }}
+                />
+              )}
+              <div className="rounded bg-blue-600 px-2 py-0.5 text-sm font-bold tracking-widest text-white shadow-sm inline-block">
+                {plate}
+              </div>
             </div>
           </div>
         </div>
@@ -177,6 +187,11 @@ export function BusDetailDrawer({
               {remainingKm.toFixed(1)} km remaining
             </div>
           )}
+          {bus.map_position?.source === "road-matched" && (
+            <div className="mt-2 text-[11px] text-neutral-500">
+              Map position is road-matched. ETA and distance use the latest live GPS estimate.
+            </div>
+          )}
         </div>
       )}
 
@@ -204,7 +219,7 @@ export function BusDetailDrawer({
         </div>
         <div className="mt-2 flex items-center gap-2 text-sm">
           <span className="font-medium text-neutral-100">{origin}</span>
-          <span className="text-neutral-600">→</span>
+          <span className="text-neutral-600">to</span>
           <span className="font-medium text-neutral-100">{destination}</span>
         </div>
         <div className="mt-1 truncate text-xs text-neutral-500">
@@ -232,7 +247,7 @@ export function BusDetailDrawer({
         <Stat
           icon={<Clock className="h-4 w-4" />}
           label="ETA"
-          value={etaHuman ?? "—"}
+          value={etaHuman ?? "None"}
         />
       </div>
 
