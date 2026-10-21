@@ -58,7 +58,9 @@ export interface PublicBus {
   } | null;
   vehicle: {
     registration_plate: string;
-    color: string | null;
+    primary_colour: string | null;
+    vehicle_type: string | null;
+    photo_url: string | null;
     capacity: number | null;
     passenger_count: number;
   };

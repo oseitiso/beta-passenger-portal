@@ -60,6 +60,14 @@ function compassDirection(heading: number): string {
   return dirs[idx];
 }
 
+function getVehicleImage(type?: string | null) {
+  const t = type?.toLowerCase() || "bus";
+  if (["bus", "coach", "minibus", "sprinter", "combi"].includes(t)) {
+    return `/vehicles/${t}.png`;
+  }
+  return "/vehicles/bus.png";
+}
+
 export function BusDetailDrawer({
   bus,
   onClose,
@@ -136,18 +144,27 @@ export function BusDetailDrawer({
       {/* Header */}
       <div className="flex flex-shrink-0 items-center justify-between border-b border-neutral-800 px-4 py-4">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-orange-600/20 text-orange-500">
-            <Bus className="h-5 w-5" />
+          
+          {/* Vehicle Image & Plate */}
+          <div className="flex flex-col items-center gap-1.5">
+            <div className="flex h-[72px] w-[128px] items-center justify-center rounded border border-neutral-700 bg-white p-1 shadow-sm">
+              <img 
+                src={getVehicleImage(bus.vehicle?.vehicle_type)} 
+                alt={bus.vehicle?.vehicle_type || "bus"}
+                className="h-full w-full object-contain"
+              />
+            </div>
           </div>
+          
           <div>
             <div className="text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
               Live bus
             </div>
             <div className="mt-1 flex items-center gap-2">
-              {bus.vehicle?.color && (
+              {bus.vehicle?.primary_colour && (
                 <div 
                   className="h-4 w-4 rounded-full border border-neutral-600 shadow-sm" 
-                  style={{ backgroundColor: bus.vehicle.color }}
+                  style={{ backgroundColor: bus.vehicle.primary_colour }}
                 />
               )}
               <div className="rounded bg-blue-600 px-2 py-0.5 text-sm font-bold tracking-widest text-white shadow-sm inline-block">

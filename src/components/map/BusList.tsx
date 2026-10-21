@@ -74,6 +74,14 @@ function statusLabel(status: string): { label: string; colorClass: string } {
   }
 }
 
+function getVehicleImage(type?: string | null) {
+  const t = type?.toLowerCase() || "bus";
+  if (["bus", "coach", "minibus", "sprinter", "combi"].includes(t)) {
+    return `/vehicles/${t}.png`;
+  }
+  return "/vehicles/bus.png";
+}
+
 function findBookingBus(
   buses: PublicBus[],
   activeBooking: BookingDetail | null
@@ -204,59 +212,61 @@ export function BusList({
                       onClick={() => onSelectBus(bus)}
                       className="w-full px-4 py-3 text-left transition-colors hover:bg-neutral-900"
                     >
-                      <div className="flex items-center gap-2">
-                        <div
-                          className={`flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md ${
-                            isBookingBus
-                              ? "bg-orange-600 text-white"
-                              : "bg-orange-600/20 text-orange-500"
-                          }`}
-                        >
-                          <Bus className="h-3.5 w-3.5" />
-                        </div>
+                      <div className="flex items-center gap-3">
                         
-                        {/* Registration Plate & Color Box */}
-                        <div className="min-w-0 flex-1 flex flex-col items-start">
-                          <div className="flex items-center gap-2">
-                            {bus.vehicle?.color && (
+                        {/* Vehicle Image & Plate */}
+                        <div className="flex flex-col items-center gap-1.5 flex-shrink-0">
+                          <div className="flex h-[60px] w-[112px] items-center justify-center rounded border border-neutral-700 bg-white p-1 shadow-sm">
+                            <img 
+                              src={getVehicleImage(bus.vehicle?.vehicle_type)} 
+                              alt={bus.vehicle?.vehicle_type || "bus"}
+                              className="h-full w-full object-contain"
+                            />
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            {bus.vehicle?.primary_colour && (
                               <div 
-                                className="h-3.5 w-3.5 rounded-full border border-neutral-600 shadow-sm" 
-                                style={{ backgroundColor: bus.vehicle.color }}
-                                title={`Color: ${bus.vehicle.color}`}
+                                className="h-3 w-3 rounded-full border border-neutral-600 shadow-sm" 
+                                style={{ backgroundColor: bus.vehicle.primary_colour }}
+                                title={`Color: ${bus.vehicle.primary_colour}`}
                               />
                             )}
-                            <span className="rounded bg-blue-600 px-1.5 py-0.5 text-xs font-bold tracking-widest text-white shadow-sm">
+                            <span className="rounded bg-blue-600 px-1.5 py-0.5 text-[10px] font-bold tracking-widest text-white shadow-sm">
                               {plate}
                             </span>
                           </div>
-                          <span className="truncate text-[11px] font-medium text-neutral-400 mt-1">
+                        </div>
+
+                        {/* Route Info */}
+                        <div className="min-w-0 flex-1 flex flex-col">
+                          <span className="truncate text-sm font-bold text-white">
                             {routeName}
+                          </span>
+                          <div className="mt-0.5 truncate text-[11px] text-neutral-400">
+                            {origin} <span className="text-neutral-600">&rarr;</span> {destination}
+                          </div>
+                          <div className="mt-1 flex items-center gap-3 text-[10px] text-neutral-500">
+                            <span className="flex items-center gap-1">
+                              <Users className="h-3 w-3" />
+                              {passengers}{capacity ? `/${capacity}` : ""}
+                            </span>
+                            <span className="truncate font-mono tracking-tight">
+                              {tripCode}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Speed & Time */}
+                        <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                          <span className="flex items-center gap-1 text-xs font-medium text-neutral-300">
+                            <Gauge className="h-3 w-3" />
+                            {speed}
+                          </span>
+                          <span className="text-[10px] text-neutral-500">
+                            {lastSeen}
                           </span>
                         </div>
 
-                        <span className="flex flex-shrink-0 items-center gap-1 text-xs text-neutral-400">
-                          <Gauge className="h-3 w-3" />
-                          {speed}
-                        </span>
-                        <span className="flex-shrink-0 text-[10px] text-neutral-500">
-                          {lastSeen}
-                        </span>
-                      </div>
-
-                      <div className="mt-2 truncate text-xs text-neutral-400">
-                        {origin} <span className="text-neutral-600">&rarr;</span>{" "}
-                        {destination}
-                      </div>
-
-                      <div className="mt-1.5 flex items-center gap-3 text-xs text-neutral-500">
-                        <span className="flex items-center gap-1">
-                          <Users className="h-3 w-3" />
-                          {passengers}
-                          {capacity ? `/${capacity}` : ""}
-                        </span>
-                        <span className="truncate font-mono text-[10px] tracking-tight">
-                          {tripCode}
-                        </span>
                       </div>
                     </button>
                   </div>
