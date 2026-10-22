@@ -1,12 +1,9 @@
-// B-ETA Passenger API Edge Function — v2.4
+// B-ETA Passenger API Edge Function — v2.5
 // Deploy to: hzmpncdygkeqvoszunfm
 // Public-facing API for the passenger portal. Returns ONLY public bus data.
 //
-// v2.4 — search uses lenient functions:
-//        - is_segment_searchable (two-point search, no ETA buffer)
-//        - is_stop_on_route_searchable (from-only search, no ETA buffer)
-//        Bus at origin is included in search results so passengers can see it.
-//        Booking still uses strict is_segment_bookable when the user submits.
+// v2.5 — Added vehicle_type and primary_colour to the JSON payload
+//        so the passenger portal can display the correct vehicle icons.
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import postgres from "https://esm.sh/postgres@3.4.4";
@@ -72,6 +69,8 @@ interface PublicTrip {
   vehicle: {
     registration_plate: string;
     capacity: number | null;
+    vehicle_type: string | null;
+    primary_colour: string | null;
     passenger_count: number;
   };
   status: string;
@@ -338,6 +337,8 @@ async function fetchActiveTrips(opts: {
       route_destination: string | null;
       vehicle_plate: string | null;
       vehicle_capacity: number | null;
+      vehicle_type: string | null;
+      primary_colour: string | null;
       passenger_count: number | null;
       current_passenger_count: number | null;
       lat: number | null;
@@ -360,6 +361,8 @@ async function fetchActiveTrips(opts: {
       r.destination as route_destination,
       v.registration_plate as vehicle_plate,
       v.capacity as vehicle_capacity,
+      v.vehicle_type as vehicle_type,
+      v.primary_colour as primary_colour,
       t.passenger_count,
       t.current_passenger_count,
       vcs.latitude as lat,
@@ -492,6 +495,8 @@ async function fetchActiveTrips(opts: {
       vehicle: {
         registration_plate: t.vehicle_plate ?? "—",
         capacity: t.vehicle_capacity,
+        vehicle_type: t.vehicle_type ?? null,
+        primary_colour: t.primary_colour ?? null,
         passenger_count: t.current_passenger_count ?? t.passenger_count ?? 0,
       },
       status: t.status,
@@ -564,7 +569,7 @@ serve(async (req: Request) => {
     if (pathname === "/health" || pathname === "/") {
       return ok({
         status: "B-ETA Passenger API active",
-        version: "2.4.0",
+        version: "2.5.0",
       });
     }
 
@@ -603,6 +608,8 @@ serve(async (req: Request) => {
           route_destination: string | null;
           vehicle_plate: string | null;
           vehicle_capacity: number | null;
+          vehicle_type: string | null;
+          primary_colour: string | null;
           passenger_count: number | null;
           current_passenger_count: number | null;
           lat: number | null;
@@ -625,6 +632,8 @@ serve(async (req: Request) => {
           r.destination as route_destination,
           v.registration_plate as vehicle_plate,
           v.capacity as vehicle_capacity,
+          v.vehicle_type as vehicle_type,
+          v.primary_colour as primary_colour,
           t.passenger_count,
           t.current_passenger_count,
           vcs.latitude as lat,
@@ -702,6 +711,8 @@ serve(async (req: Request) => {
         vehicle: {
           registration_plate: t.vehicle_plate ?? "—",
           capacity: t.vehicle_capacity,
+          vehicle_type: t.vehicle_type ?? null,
+          primary_colour: t.primary_colour ?? null,
           passenger_count: t.current_passenger_count ?? t.passenger_count ?? 0,
         },
         status: t.status,
