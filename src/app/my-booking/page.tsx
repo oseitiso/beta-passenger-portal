@@ -253,6 +253,25 @@ export default function MyBookingPage() {
               </div>
             </div>
 
+            {/* --- ADDED SEAT NUMBERS CARD --- */}
+            {booking.seat_numbers && booking.seat_numbers.length > 0 && (
+              <div className="rounded-xl border border-neutral-800 bg-neutral-900/30 p-4">
+                <div className="text-xs text-neutral-500">
+                  {booking.seat_numbers.length > 1 ? "Your seats" : "Your seat"}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {booking.seat_numbers.map((n) => (
+                    <span
+                      key={String(n)}
+                      className="flex h-10 min-w-10 items-center justify-center rounded-t-lg rounded-b-sm border-2 border-orange-500 bg-orange-600 px-2 font-mono text-base font-bold text-white"
+                    >
+                      {n}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="rounded-xl border border-orange-900/40 bg-orange-950/20 p-4">
               <div className="mb-3 flex items-center gap-1.5 text-xs font-medium text-orange-400">
                 <MapPin className="h-3.5 w-3.5" />

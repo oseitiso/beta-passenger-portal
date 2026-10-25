@@ -1,19 +1,25 @@
-// B-ETA Passenger Booking API — v1.2
+// B-ETA Passenger Booking API v1.3
 // Public-facing passenger booking endpoints. No auth required.
 //
 // Endpoints:
-//   POST /booking/request   — request a seat
-//   POST /booking/cancel    — cancel a booking
-//   GET  /booking/status    — get booking details by reference
-//   POST /booking/recover   — find bookings by phone + reference
-//   GET  /health            — health check
+//   POST /booking/request  - request a seat (supports seat_ids)
+//   POST /booking/cancel   - cancel a booking
+//   GET  /booking/status   - get booking details by reference
+//   POST /booking/recover  - find bookings by phone
+//   GET  /health           - health check
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import postgres from "https://esm.sh/postgres@3.4.4";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const sql = postgres(Deno.env.get("SUPABASE_DB_URL")!, {
   prepare: false,
 });
+
+const supabase = createClient(
+  Deno.env.get("SUPABASE_URL")!,
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+);
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -47,18 +53,20 @@ async function parseJsonBody(req: Request): Promise<any | null> {
   }
 }
 
-// ───────────────────────── Route handlers ─────────────────────────
+// ---------------------------- Route handlers ----------------------------
 
 async function handleHealth(): Promise<Response> {
   return ok({
     status: "B-ETA Passenger Booking API active",
-    version: "1.2.0",
+    version: "1.3.0",
     timestamp: new Date().toISOString(),
   });
 }
 
 async function handleRequest(body: any): Promise<Response> {
   const seats = Number(body.requested_seats ?? 1);
+  const seatIds = Array.isArray(body.seat_ids) ? body.seat_ids : null;
+
   if (
     !body.trip_id ||
     !body.from_stop_id ||
@@ -71,28 +79,33 @@ async function handleRequest(body: any): Promise<Response> {
   }
 
   try {
-    const rows = await sql`
-      select public.request_booking(
-        ${body.trip_id}::uuid,
-        ${body.from_stop_id}::uuid,
-        ${body.to_stop_id}::uuid,
-        ${seats}::integer,
-        ${body.user_id ?? null}::uuid,
-        ${body.anonymous_id}::text,
-        ${body.passenger_name ?? null}::text,
-        ${body.passenger_phone ?? null}::text,
-        ${body.preferred_seat ?? null}::integer
-      ) as result
-    `;
+    const { data, error } = await supabase.rpc("request_booking", {
+      p_trip_id: body.trip_id,
+      p_from_stop_id: body.from_stop_id,
+      p_to_stop_id: body.to_stop_id,
+      p_requested_seats: seats,
+      p_user_id: body.user_id ?? null,
+      p_anonymous_id: body.anonymous_id,
+      p_passenger_name: body.passenger_name ?? null,
+      p_passenger_phone: body.passenger_phone ?? null,
+      p_preferred_seat: body.preferred_seat ?? null,
+      p_seat_ids: seatIds,
+    });
 
-    const result = rows[0]?.result;
-    if (!result) return err("No result from request_booking", 500);
-
-    if (!result.success) {
-      return err(result.error ?? "Booking request failed", 400, result);
+    if (error) {
+      if (error.code === "P0001") {
+        return err("One or more selected seats are already taken.", 409);
+      }
+      if (error.code === "P0002") return err("Trip not found.", 404);
+      if (error.code === "P0003") return err("Invalid seat selection.", 400);
+      return err(error.message, 500);
     }
 
-    return ok(result, 201);
+    if (!data?.success) {
+      return err(data?.error ?? "Booking request failed", 400, data ?? {});
+    }
+
+    return ok(data, 201);
   } catch (e: any) {
     return err(e?.message ?? "Internal error", 500);
   }
@@ -147,6 +160,10 @@ async function handleStatus(url: URL): Promise<Response> {
         h.expires_at,
         h.accepted_at,
         h.picked_up_at,
+        (select array_agg(vs.seat_number order by vs.row_number, vs.column_number)
+           from booking_seats bs
+           join vehicle_seats vs on vs.id = bs.seat_id
+          where bs.booking_id = h.id) as seat_numbers,
         p.id as pickup_id,
         p.status as pickup_status,
         p.driver_id,
@@ -221,7 +238,7 @@ async function handleRecover(body: any): Promise<Response> {
   }
 }
 
-// ───────────────────────── Server ─────────────────────────
+// ------------------------------- Server ---------------------------------
 
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") {

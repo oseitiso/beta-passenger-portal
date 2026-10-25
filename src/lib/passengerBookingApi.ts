@@ -41,6 +41,7 @@ export interface BookingDetail {
   trip_code?: string | null;
   pickup_missed_reason?: string | null;
   pickup_disruption_flag?: boolean | null;
+  seat_numbers?: (number | string)[] | null; // <-- ADDED THIS LINE
 }
 
 /**
@@ -114,7 +115,7 @@ export function clearActiveBooking(): void {
   localStorage.removeItem(BOOKING_STORAGE_KEY);
 }
 
-// ───────────────────────── Booking history (paper trail) ───────────────────
+// ───────────────────────── Booking history (paper trail) ─────────────────────────
 
 /**
  * Upsert an ended booking into the rolling history log.
@@ -155,7 +156,7 @@ export function clearBookingHistory(): void {
   localStorage.removeItem(HISTORY_KEY);
 }
 
-// ───────────────────────── Booking API calls ───────────────────────────────
+// ───────────────────────── Booking API calls ─────────────────────────
 
 async function request<T>(
   path: string,
@@ -180,6 +181,7 @@ export async function requestBooking(input: {
   requested_seats: number;
   passenger_name?: string;
   passenger_phone?: string;
+  seat_ids?: string[];
 }): Promise<BookingResponse> {
   return request<BookingResponse>("/booking/request", {
     method: "POST",
