@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo, useRef } from "react";
 import {
-  X, Loader2, CheckCircle2, AlertCircle, Users, MapPin, Phone, User, ArrowRight, Ban, Armchair
+  X, Loader2, CheckCircle2, AlertCircle, Users, MapPin, Phone, User, ArrowRight, Ban
 } from "lucide-react";
 import {
   requestBooking, saveActiveBooking, type BookingResponse,
@@ -21,7 +21,7 @@ interface BookingModalProps {
 
 type Stage = "form" | "seat-selection" | "submitting" | "success" | "error";
 
-const ENABLE_SEAT_SELECTION = true; 
+const ENABLE_SEAT_SELECTION = true;
 const PHONE_PREFIX = "+267";
 const PHONE_DIGITS = 8;
 
@@ -46,13 +46,13 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
   const [seats, setSeats] = useState(1);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [result, setResult] = useState<BookingResponse | null>(null);
-  
+
   const [selectedSeatIds, setSelectedSeatIds] = useState<string[]>([]);
   const [dbSeats, setDbSeats] = useState<DbSeat[]>([]);
   const [bookedSeatIds, setBookedSeatIds] = useState<string[]>([]);
   const [loadingSeats, setLoadingSeats] = useState(false);
   const [driverSide, setDriverSide] = useState<"LEFT" | "RIGHT">("RIGHT");
-  const [seatConfig, setSeatConfig] = useState<any>(null); // Added this
+  const [seatConfig, setSeatConfig] = useState<any>(null);
 
   const confirmedRef = useRef(false);
   const abandonedFiredRef = useRef(false);
@@ -93,9 +93,7 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
   useEffect(() => {
     if (!fromStopId) return;
     const fromStop = routeStops.find((s) => s.stop_id === fromStopId);
-    if (!fromStop || !fromStop.boardable) {
-      setFromStopId(defaultFromId);
-    }
+    if (!fromStop || !fromStop.boardable) setFromStopId(defaultFromId);
   }, [defaultFromId, fromStopId, routeStops]);
 
   const fromStop = useMemo(() => routeStops.find((s) => s.stop_id === fromStopId), [routeStops, fromStopId]);
@@ -140,7 +138,7 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
   const proceedToSeats = async () => {
     setStage("seat-selection");
     setLoadingSeats(true);
-    
+
     try {
       const plate = bus.vehicle?.registration_plate;
       if (!plate) throw new Error("No vehicle plate found on this bus.");
@@ -170,16 +168,22 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
 
       setDbSeats(seatsData as DbSeat[]);
 
-      // Fetch booked seats to disable them
-      const { data: bookedData, error: bErr } = await supabase
-        .from("booking_seats")
-        .select("seat_id")
-        .eq("trip_id", bus.trip_id);
-
-      if (!bErr && bookedData) {
-        setBookedSeatIds(bookedData.map(b => b.seat_id));
+            // Fetch all taken seats (app bookings + walk-ups) via the safe public API
+      const { data: takenData, error: takenErr } = await supabase.rpc(
+        "get_taken_seat_ids",
+        { p_trip_id: bus.trip_id }
+      );
+      
+      if (!takenErr && takenData) {
+        setBookedSeatIds(takenData);
+      } else {
+        // Fallback just for app bookings if the RPC fails
+        const { data: bookedData } = await supabase
+          .from("booking_seats")
+          .select("seat_id")
+          .eq("trip_id", bus.trip_id);
+        setBookedSeatIds((bookedData ?? []).map((b: any) => b.seat_id));
       }
-
     } catch (err: any) {
       console.error("Seat Map Error:", err);
       alert(`Seat Map Error: ${err.message}`);
@@ -223,8 +227,7 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
     logBookingSubmitted(bus.trip_id, seats);
 
     try {
-      // 10 second timeout safeguard to prevent the UI from hanging forever
-      const timeoutPromise = new Promise<never>((_, reject) => 
+      const timeoutPromise = new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error("Request timed out. Please check your connection and try again.")), 10000)
       );
 
@@ -258,9 +261,7 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
       }
 
       confirmedRef.current = true;
-      if (response.booking_reference) {
-        logBookingConfirmed(response.booking_reference, bus.trip_id);
-      }
+      if (response.booking_reference) logBookingConfirmed(response.booking_reference, bus.trip_id);
 
       setResult(response);
       setStage("success");
@@ -275,10 +276,8 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
   const canSubmit =
     name.trim().length >= 2 &&
     phoneLocal.length === PHONE_DIGITS &&
-    seats >= 1 &&
-    seats <= 10 &&
-    Boolean(fromStop) &&
-    Boolean(toStop) &&
+    seats >= 1 && seats <= 10 &&
+    Boolean(fromStop) && Boolean(toStop) &&
     fromStop!.boardable === true &&
     routeStops.findIndex((s) => s.stop_id === toStopId) > routeStops.findIndex((s) => s.stop_id === fromStopId) &&
     (!ENABLE_SEAT_SELECTION || selectedSeatIds.length === seats);
@@ -288,45 +287,27 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
   return (
     <div className="fixed inset-0 flex items-center justify-center p-4" style={{ zIndex: 9999 }}>
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={stage === "form" ? onClose : undefined} style={{ zIndex: 9999 }} />
-
       <div className="relative w-full max-w-md overflow-hidden rounded-2xl border border-neutral-800 bg-neutral-950 shadow-2xl" style={{ zIndex: 10000 }}>
-        
         <div className="flex items-center justify-between border-b border-neutral-800 px-4 py-3">
           <div>
-            <div className="text-xs text-neutral-500">
-              {stage === "seat-selection" ? "Select your seats" : "Request a seat"}
-            </div>
-            <div className="text-sm font-semibold text-neutral-100">
-              {bus.vehicle?.registration_plate ?? "Bus"}
-            </div>
+            <div className="text-xs text-neutral-500">{stage === "seat-selection" ? "Select your seats" : "Request a seat"}</div>
+            <div className="text-sm font-semibold text-neutral-100">{bus.vehicle?.registration_plate ?? "Bus"}</div>
           </div>
           {stage !== "submitting" && (
-            <button
-              onClick={() => stage === "seat-selection" ? setStage("form") : onClose()}
-              className="rounded-lg p-1.5 text-neutral-400 transition-colors hover:bg-neutral-800 hover:text-neutral-100"
-            >
+            <button onClick={() => stage === "seat-selection" ? setStage("form") : onClose()} className="rounded-lg p-1.5 text-neutral-400 transition-colors hover:bg-neutral-800 hover:text-neutral-100">
               <X className="h-4 w-4" />
             </button>
           )}
         </div>
-
-        <div className="max-h-[75vh] overflow-y-auto px-4 py-4">
-          
+        <div className={stage === "seat-selection" ? "px-4 py-2 overflow-hidden" : "max-h-[75vh] overflow-y-auto px-4 py-4"}>
           {stage === "form" && (
             <>
               <div className="mb-4 rounded-lg border border-neutral-800 bg-neutral-900/50 p-3">
-                <div className="flex items-center gap-2 text-xs text-neutral-500">
-                  <MapPin className="h-3 w-3" /> Trip
-                </div>
-                <div className="mt-1 text-sm font-medium text-neutral-100">
-                  {bus.route?.name ?? "Route"}
-                </div>
+                <div className="flex items-center gap-2 text-xs text-neutral-500"><MapPin className="h-3 w-3" /> Trip</div>
+                <div className="mt-1 text-sm font-medium text-neutral-100">{bus.route?.name ?? "Route"}</div>
               </div>
-
               <div className="mb-4 rounded-lg border border-orange-900/40 bg-orange-950/20 p-3">
-                <div className="flex items-center gap-2 text-xs text-orange-400/80">
-                  <ArrowRight className="h-3 w-3" /> Your journey
-                </div>
+                <div className="flex items-center gap-2 text-xs text-orange-400/80"><ArrowRight className="h-3 w-3" /> Your journey</div>
                 {journeyReady ? (
                   <div className="mt-1 flex items-center gap-2 text-sm">
                     <span className="font-medium text-neutral-100">{fromStop!.name}</span>
@@ -334,20 +315,12 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
                     <span className="font-medium text-neutral-100">{toStop!.name}</span>
                   </div>
                 ) : (
-                  <div className="mt-1 text-sm text-neutral-400">
-                    {hasAnyBoardableStop ? "Select a boarding and alighting stop to see your journey." : "No stops are currently available to board on this bus."}
-                  </div>
+                  <div className="mt-1 text-sm text-neutral-400">{hasAnyBoardableStop ? "Select a boarding and alighting stop to see your journey." : "No stops are currently available to board on this bus."}</div>
                 )}
               </div>
-
               <div className="mb-3">
-                <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-neutral-400">
-                  <MapPin className="h-3 w-3" /> Boarding stop
-                </label>
-                <select
-                  value={fromStopId} onChange={(e) => setFromStopId(e.target.value)} disabled={!hasAnyBoardableStop}
-                  className="w-full rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 focus:border-orange-600 focus:outline-none disabled:opacity-50"
-                >
+                <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-neutral-400"><MapPin className="h-3 w-3" /> Boarding stop</label>
+                <select value={fromStopId} onChange={(e) => setFromStopId(e.target.value)} disabled={!hasAnyBoardableStop} className="w-full rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 focus:border-orange-600 focus:outline-none disabled:opacity-50">
                   {!hasAnyBoardableStop && <option value="">No stops available to board right now</option>}
                   {hasAnyBoardableStop && !fromStopId && <option value="">Select a boarding stop…</option>}
                   {routeStops.map((stop) => (
@@ -357,45 +330,24 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
                   ))}
                 </select>
               </div>
-
               <div className="mb-3">
-                <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-neutral-400">
-                  <MapPin className="h-3 w-3" /> Alighting stop
-                </label>
-                <select
-                  value={toStopId} onChange={(e) => setToStopId(e.target.value)} disabled={!fromStopId || alightingOptions.length === 0}
-                  className="w-full rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 focus:border-orange-600 focus:outline-none disabled:opacity-50"
-                >
-                  {(!fromStopId || alightingOptions.length === 0) && (
-                    <option value="">{fromStopId ? "No stops available after your boarding stop." : "Select a boarding stop first."}</option>
-                  )}
+                <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-neutral-400"><MapPin className="h-3 w-3" /> Alighting stop</label>
+                <select value={toStopId} onChange={(e) => setToStopId(e.target.value)} disabled={!fromStopId || alightingOptions.length === 0} className="w-full rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 focus:border-orange-600 focus:outline-none disabled:opacity-50">
+                  {(!fromStopId || alightingOptions.length === 0) && <option value="">{fromStopId ? "No stops available after your boarding stop." : "Select a boarding stop first."}</option>}
                   {alightingOptions.map((stop) => <option key={stop.stop_id} value={stop.stop_id}>{stop.name}</option>)}
                 </select>
               </div>
-
               <div className="mb-3">
-                <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-neutral-400">
-                  <User className="h-3 w-3" /> Full name
-                </label>
-                <input
-                  type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Name Surname"
-                  className="w-full rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-600 focus:border-orange-600 focus:outline-none"
-                />
+                <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-neutral-400"><User className="h-3 w-3" /> Full name</label>
+                <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Name Surname" className="w-full rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-600 focus:border-orange-600 focus:outline-none" />
               </div>
-
               <div className="mb-3">
-                <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-neutral-400">
-                  <Phone className="h-3 w-3" /> Phone number
-                </label>
+                <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-neutral-400"><Phone className="h-3 w-3" /> Phone number</label>
                 <div className="flex overflow-hidden rounded-lg border border-neutral-700 bg-neutral-900 focus-within:border-orange-600">
                   <span className="flex items-center border-r border-neutral-700 bg-neutral-950 px-3 text-sm font-mono text-neutral-400">{PHONE_PREFIX}</span>
-                  <input
-                    type="tel" inputMode="numeric" value={phoneLocal} onChange={(e) => handlePhoneChange(e.target.value)} placeholder="71234567" maxLength={PHONE_DIGITS}
-                    className="flex-1 bg-transparent px-3 py-2 text-sm font-mono text-neutral-100 placeholder:text-neutral-600 focus:outline-none"
-                  />
+                  <input type="tel" inputMode="numeric" value={phoneLocal} onChange={(e) => handlePhoneChange(e.target.value)} placeholder="71234567" maxLength={PHONE_DIGITS} className="flex-1 bg-transparent px-3 py-2 text-sm font-mono text-neutral-100 placeholder:text-neutral-600 focus:outline-none" />
                 </div>
               </div>
-
               <div className="mb-4">
                 <label className="mb-1 block text-xs font-medium text-neutral-400">Number of seats</label>
                 <div className="flex items-center gap-2">
@@ -404,7 +356,6 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
                   <button onClick={() => setSeats((s) => Math.min(10, s + 1))} disabled={seats >= 10} className="flex h-9 w-9 items-center justify-center rounded-lg border border-neutral-700 text-neutral-200 transition-colors hover:bg-neutral-800 disabled:opacity-40">+</button>
                 </div>
               </div>
-
               {ENABLE_SEAT_SELECTION && (
                 <div className="mb-4">
                   <button
@@ -415,27 +366,36 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
                         : "border-neutral-700 bg-neutral-900 text-neutral-200 hover:bg-neutral-800"
                     }`}
                   >
-                    <Armchair className="h-4 w-4" />
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="h-4 w-4"
+                    >
+                      <path d="M7 10.5V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v5.5" />
+                      <path d="M5 10.5h12" />
+                      <path d="M5 14h14a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1h-2l-1 3" />
+                      <path d="M5 21v-2a1 1 0 0 1 1-1h2" />
+                      <circle cx="8" cy="18" r="1" />
+                    </svg>
                     {selectedSeatIds.length === seats
                       ? `${seats} Seat${seats > 1 ? "s" : ""} Selected`
                       : `Choose ${seats} seat${seats > 1 ? "s" : ""}`}
                   </button>
                 </div>
               )}
-
               <div className="mb-4 rounded-lg border border-amber-900/40 bg-amber-950/30 p-3 text-xs text-amber-200">
                 You pay cash to the driver when you board. The driver will confirm your request and give you a 6-digit PIN.
               </div>
-
-              <button
-                onClick={submit} disabled={!canSubmit}
-                className="w-full rounded-lg bg-orange-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-40"
-              >
+              <button onClick={submit} disabled={!canSubmit} className="w-full rounded-lg bg-orange-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-40">
                 Request seat{seats > 1 ? "s" : ""}
               </button>
             </>
           )}
-
           {stage === "seat-selection" && (
             <div className="py-2">
               {loadingSeats ? (
@@ -452,38 +412,22 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
                   driverSide={driverSide}
                   seatConfig={seatConfig}
                   onToggleSeat={(id) => {
-                    setSelectedSeatIds((prev) => 
-                      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
-                    );
+                    setSelectedSeatIds((prev) => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
                   }}
                 />
               )}
-
               <div className="mt-6 flex gap-2">
-                <button
-                  onClick={() => setStage("form")}
-                  className="flex-1 rounded-lg border border-neutral-700 px-4 py-2.5 text-sm font-medium text-neutral-200 hover:bg-neutral-800"
-                >
-                  Back
-                </button>
-                <button
-                  onClick={confirmSeats}
-                  disabled={selectedSeatIds.length !== seats || loadingSeats}
-                  className="flex-1 rounded-lg bg-orange-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-orange-500 disabled:opacity-50"
-                >
-                  Confirm {seats} seat{seats > 1 ? "s" : ""}
-                </button>
+                <button onClick={() => setStage("form")} className="flex-1 rounded-lg border border-neutral-700 px-4 py-2.5 text-sm font-medium text-neutral-200 hover:bg-neutral-800">Back</button>
+                <button onClick={confirmSeats} disabled={selectedSeatIds.length !== seats || loadingSeats} className="flex-1 rounded-lg bg-orange-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-orange-500 disabled:opacity-50">Confirm {seats} seat{seats > 1 ? "s" : ""}</button>
               </div>
             </div>
           )}
-
           {stage === "submitting" && (
             <div className="flex flex-col items-center py-8">
               <Loader2 className="mb-3 h-8 w-8 animate-spin text-orange-500" />
               <div className="text-sm font-medium text-neutral-200">Sending request…</div>
             </div>
           )}
-
           {stage === "success" && result && (
             <div className="text-center">
               <CheckCircle2 className="mx-auto mb-3 h-12 w-12 text-green-500" />
@@ -495,7 +439,6 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
               <button onClick={onClose} className="mt-4 w-full rounded-lg border border-neutral-700 px-4 py-2.5 text-sm font-medium text-neutral-200 transition-colors hover:bg-neutral-800">Done</button>
             </div>
           )}
-
           {stage === "error" && (
             <div className="text-center">
               <AlertCircle className="mx-auto mb-3 h-12 w-12 text-red-500" />
