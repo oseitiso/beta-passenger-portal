@@ -175,22 +175,9 @@ export function BusDetailDrawer({
                 {plate}
               </div>
             </div>
-            {(operatorName || showLogo) && (
-              <div className="mt-2 flex items-center gap-2">
-                {showLogo && operatorId && (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={operatorLogoUrl(operatorId)}
-                    alt={operatorName ?? "Operator logo"}
-                    onError={() => setLogoFailed(true)}
-                    className="h-7 max-w-[88px] rounded bg-white object-contain p-0.5"
-                  />
-                )}
-                {operatorName && (
-                  <span className="truncate text-xs font-semibold text-neutral-200">
-                    {operatorName}
-                  </span>
-                )}
+            {operatorName && (
+              <div className="mt-2 truncate text-xs font-semibold text-neutral-200">
+                {operatorName}
               </div>
             )}
           </div>
@@ -235,17 +222,30 @@ export function BusDetailDrawer({
       )}
 
       {/* Current location (place name) */}
-      <div className="flex-shrink-0 border-b border-neutral-800 bg-neutral-900/40 px-4 py-4">
-        <div className="flex items-center gap-1.5 text-xs font-medium text-neutral-500">
-          <Navigation className="h-3 w-3" />
-          CURRENT LOCATION
+      <div className="flex flex-shrink-0 items-center justify-between gap-3 border-b border-neutral-800 bg-neutral-900/40 px-4 py-4">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5 text-xs font-medium text-neutral-500">
+            <Navigation className="h-3 w-3" />
+            CURRENT LOCATION
+          </div>
+          <div className="mt-1.5 text-base font-semibold text-neutral-100">
+            {placeName ?? "Location unavailable"}
+          </div>
+          {lat != null && lng != null && (
+            <div className="mt-1 font-mono text-[11px] text-neutral-500">
+              {lat.toFixed(5)}, {lng.toFixed(5)}
+            </div>
+          )}
         </div>
-        <div className="mt-1.5 text-base font-semibold text-neutral-100">
-          {placeName ?? "Location unavailable"}
-        </div>
-        {lat != null && lng != null && (
-          <div className="mt-1 font-mono text-[11px] text-neutral-500">
-            {lat.toFixed(5)}, {lng.toFixed(5)}
+        {showLogo && operatorId && (
+          <div className="flex h-[88px] w-[150px] flex-shrink-0 items-center justify-center rounded-lg bg-white p-2 shadow-sm">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={operatorLogoUrl(operatorId)}
+              alt={operatorName ?? "Operator logo"}
+              onError={() => setLogoFailed(true)}
+              className="h-full w-full object-contain"
+            />
           </div>
         )}
       </div>

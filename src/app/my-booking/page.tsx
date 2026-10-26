@@ -33,6 +33,29 @@ import {
 
 const POLL_INTERVAL_MS = 10_000;
 
+/** [57,58,59,60,64] -> "57–60, 64" (consecutive seats are collapsed into ranges). */
+function formatSeatNumbers(raw: (number | string)[] | null | undefined): string {
+  const nums = (raw ?? [])
+    .map((n) => Number(n))
+    .filter((n) => Number.isFinite(n))
+    .sort((a, b) => a - b);
+  if (nums.length === 0) return "—";
+  const parts: string[] = [];
+  let start = nums[0];
+  let prev = nums[0];
+  for (let i = 1; i <= nums.length; i++) {
+    const cur = nums[i];
+    if (cur === prev + 1) {
+      prev = cur;
+      continue;
+    }
+    parts.push(start === prev ? String(start) : prev === start + 1 ? `${start}, ${prev}` : `${start}–${prev}`);
+    start = cur;
+    prev = cur;
+  }
+  return parts.join(", ");
+}
+
 const TicketNotch = ({ side }: { side: "left" | "right" }) => (
   <div
     className={`absolute top-1/2 -mt-3 h-6 w-6 rounded-full bg-neutral-950 ${
@@ -241,10 +264,14 @@ export default function MyBookingPage() {
                   </div>
                 </div>
 
-                <div className="flex h-14 w-14 flex-shrink-0 flex-col items-center justify-center rounded-xl border border-orange-500/40 bg-orange-500/10">
-                  <div className="text-[8px] font-semibold uppercase tracking-widest text-orange-300/80">Seat</div>
-                  <div className="text-xl font-black leading-none text-orange-400">
-                    {booking.seat_numbers?.join(", ") ?? "—"}
+                <div className="flex h-14 min-w-[3.5rem] flex-shrink-0 flex-col items-center justify-center rounded-xl border border-orange-500/40 bg-orange-500/10 px-2">
+                  <div className="text-[8px] font-semibold uppercase tracking-widest text-orange-300/80">
+                    {(booking.seat_numbers?.length ?? 0) > 1 ? "Seats" : "Seat"}
+                  </div>
+                  <div className="whitespace-nowrap text-xl font-black leading-none text-orange-400">
+                    {(booking.seat_numbers?.length ?? 0) > 2
+                      ? `×${booking.seat_numbers?.length}`
+                      : formatSeatNumbers(booking.seat_numbers)}
                   </div>
                 </div>
               </div>
@@ -258,6 +285,14 @@ export default function MyBookingPage() {
 
               {/* Details */}
               <div className="grid grid-cols-2 gap-x-4 gap-y-2 px-4 py-3 sm:grid-cols-4">
+                {(booking.seat_numbers?.length ?? 0) > 2 && (
+                  <div className="col-span-2 min-w-0 sm:col-span-4">
+                    <div className="text-[9px] uppercase tracking-widest text-neutral-500">Seat numbers</div>
+                    <div className="break-words text-xs font-semibold text-orange-300">
+                      {formatSeatNumbers(booking.seat_numbers)}
+                    </div>
+                  </div>
+                )}
                 <div className="min-w-0">
                   <div className="text-[9px] uppercase tracking-widest text-neutral-500">Passenger</div>
                   <div className="truncate text-xs font-semibold text-white">{booking.passenger_name ?? "—"}</div>
