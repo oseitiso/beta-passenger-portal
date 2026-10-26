@@ -158,20 +158,38 @@ export function clearBookingHistory(): void {
 
 // ───────────────────────── Booking API calls ─────────────────────────
 
+export class RequestTimeoutError extends Error {
+  constructor() {
+    super("The connection is slow and the request timed out.");
+    this.name = "RequestTimeoutError";
+  }
+}
+
 async function request<T>(
   path: string,
-  init?: RequestInit
+  init?: RequestInit,
+  timeoutMs = 30000
 ): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-      ...(init?.headers ?? {}),
-    },
-  });
-  const body = await res.json().catch(() => ({}));
-  return body as T;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      ...init,
+      signal: controller.signal,
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        ...(init?.headers ?? {}),
+      },
+    });
+    const body = await res.json().catch(() => ({}));
+    return body as T;
+  } catch (e) {
+    if ((e as any)?.name === "AbortError") throw new RequestTimeoutError();
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function requestBooking(input: {
@@ -190,6 +208,46 @@ export async function requestBooking(input: {
       anonymous_id: getOrCreateAnonymousId(),
     }),
   });
+}
+
+/**
+ * After a timeout or dropped connection the booking may still have reached the
+ * server. Look it up by phone and return it if a live request exists.
+ * Returns null when nothing is found (the request genuinely never arrived).
+ */
+export async function recoverActiveBooking(
+  phone: string
+): Promise<BookingResponse | null> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await request<{ success: boolean; bookings?: any[] }>(
+        "/booking/recover",
+        { method: "POST", body: JSON.stringify({ passenger_phone: phone }) },
+        15000
+      );
+      if (!res.success || !Array.isArray(res.bookings)) return null;
+      const now = Date.now();
+      const live = res.bookings.find((b) => {
+        const s = String(b.handoff_status).toUpperCase();
+        if (s === "ACCEPTED") return true;
+        return s === "PENDING" && new Date(b.expires_at).getTime() > now;
+      });
+      if (!live) return null;
+      return {
+        success: true,
+        handoff_id: live.handoff_id,
+        booking_reference: live.booking_reference,
+        pickup_id: live.pickup_id ?? undefined,
+        token: "",
+        expires_at: live.expires_at,
+        status: String(live.handoff_status),
+        booking_pin: live.booking_pin ?? null,
+      };
+    } catch {
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+  }
+  return null;
 }
 
 export async function getBookingStatus(

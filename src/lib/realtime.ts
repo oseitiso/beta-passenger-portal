@@ -5,6 +5,11 @@ const SUPABASE_URL =
   "https://hzmpncdygkeqvoszunfm.supabase.co";
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
 
+// The vehicle_matched_tracks table does not exist in the B-ETA database yet.
+// While this is false, the app never queries or subscribes to it (that was
+// producing a 404 on every page load). Set it to true once the table is created.
+const MATCHED_TRACKS_ENABLED = false;
+
 // Dedicated client for realtime (public — anon key)
 const supabaseRealtime = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
@@ -52,19 +57,23 @@ export function subscribeToPassengerMapChanges(
   onMatchedTrackChange: (track: MatchedTrack | null, tripId?: string, vehicleId?: string) => void,
   onStatus?: (status: string) => void
 ): Unsubscribe {
-  const channel = supabaseRealtime
+  let builder = supabaseRealtime
     .channel("passenger_live_map")
     .on("postgres_changes", {
       event: "*", schema: "public", table: "vehicle_current_state",
-    }, onVehicleStateChange)
-    .on("postgres_changes", {
+    }, onVehicleStateChange);
+
+  if (MATCHED_TRACKS_ENABLED) {
+    builder = builder.on("postgres_changes", {
       event: "*", schema: "public", table: "vehicle_matched_tracks",
     }, (payload) => {
       const row = payload.new as MatchedTrack | undefined;
       const oldRow = payload.old as Partial<MatchedTrack> | undefined;
       onMatchedTrackChange(row ?? null, row?.trip_id ?? oldRow?.trip_id, row?.vehicle_id ?? oldRow?.vehicle_id);
-    })
-    .subscribe((status) => onStatus?.(status));
+    });
+  }
+
+  const channel = builder.subscribe((status) => onStatus?.(status));
   return () => { void supabaseRealtime.removeChannel(channel); };
 }
 
@@ -80,6 +89,7 @@ export interface MatchedTrack {
 }
 
 export async function getMatchedTracks(): Promise<MatchedTrack[]> {
+  if (!MATCHED_TRACKS_ENABLED) return [];
   const { data, error } = await supabaseRealtime
     .from("vehicle_matched_tracks")
     .select("trip_id,vehicle_id,paths,latest_latitude,latest_longitude,confidence,matched_at,source_recorded_at");
@@ -90,6 +100,7 @@ export async function getMatchedTracks(): Promise<MatchedTrack[]> {
 export function subscribeToMatchedTracks(
   onChange: (track: MatchedTrack | null, tripId: string) => void
 ): Unsubscribe {
+  if (!MATCHED_TRACKS_ENABLED) return () => {};
   const channel = supabaseRealtime
     .channel("passenger_vehicle_matched_tracks")
     .on("postgres_changes", {

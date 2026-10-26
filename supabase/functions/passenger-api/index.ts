@@ -1,7 +1,9 @@
-// B-ETA Passenger API Edge Function — v2.5
+// B-ETA Passenger API Edge Function — v2.6
 // Deploy to: hzmpncdygkeqvoszunfm
 // Public-facing API for the passenger portal. Returns ONLY public bus data.
 //
+// v2.6 — Stops now include fare_zone and fare_zone_distance_km so the
+//        passenger map can group stops into operator-defined fare zones.
 // v2.5 — Added vehicle_type and primary_colour to the JSON payload
 //        so the passenger portal can display the correct vehicle icons.
 
@@ -38,6 +40,8 @@ interface StopShape {
   lng: number | null;
   order: number;
   distance_from_origin_km: number | null;
+  fare_zone: number | null;
+  fare_zone_distance_km: number | null;
   boardable: boolean;
   unboardable_reason:
     | "bus_passed"
@@ -127,6 +131,8 @@ async function loadStopsForRouteWithBoardability(
       lng: number | null;
       stop_order: number;
       distance_from_origin_km: number | null;
+      fare_zone: number | null;
+      fare_zone_distance_km: string | number | null;
     }[]
   >`
     select
@@ -137,7 +143,9 @@ async function loadStopsForRouteWithBoardability(
       s.lat,
       s.lng,
       rs.stop_order,
-      rs.distance_from_origin_km
+      rs.distance_from_origin_km,
+      rs.fare_zone,
+      rs.fare_zone_distance_km
     from route_stops rs
     join stops s on s.id = rs.stop_id
     where rs.route_id = ${routeId}::uuid
@@ -215,6 +223,9 @@ async function loadStopsForRouteWithBoardability(
       lng: r.lng,
       order: r.stop_order,
       distance_from_origin_km: r.distance_from_origin_km,
+      fare_zone: r.fare_zone != null ? Number(r.fare_zone) : null,
+      fare_zone_distance_km:
+        r.fare_zone_distance_km != null ? Number(r.fare_zone_distance_km) : null,
       boardable,
       unboardable_reason,
     };
@@ -569,7 +580,7 @@ serve(async (req: Request) => {
     if (pathname === "/health" || pathname === "/") {
       return ok({
         status: "B-ETA Passenger API active",
-        version: "2.5.0",
+        version: "2.6.0",
       });
     }
 

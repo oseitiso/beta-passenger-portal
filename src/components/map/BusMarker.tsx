@@ -19,7 +19,8 @@ interface BusMarkerProps {
 const createBusIcon = (
   selected: boolean,
   dimmed: boolean,
-  bookingState: BookingMarkerState = null
+  bookingState: BookingMarkerState = null,
+  heading: number = 0
 ) => {
   const opacity = dimmed ? "0.35" : "1";
 
@@ -86,13 +87,19 @@ const createBusIcon = (
           transition: transform 0.2s, opacity 0.2s;
           opacity: ${opacity};
         ">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M8 6v6"></path><path d="M15 6v6"></path>
-            <path d="M2 12h19.6"></path>
-            <path d="M18 18h3s.5-1.7.8-2.8c.1-.4.2-.8.2-1.2 0-.4-.1-.8-.2-1.2l-1.4-5C20.1 6.8 19.1 6 18 6H4a2 2 0 0 0-2 2v10h3"></path>
-            <circle cx="7" cy="18" r="2"></circle>
-            <circle cx="16" cy="18" r="2"></circle>
-          </svg>
+          <div style="
+            transform: rotate(${heading}deg);
+            transition: transform 0.4s ease-out;
+            display: flex; align-items: center; justify-content: center;
+          ">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M8 6v6"></path><path d="M15 6v6"></path>
+              <path d="M2 12h19.6"></path>
+              <path d="M18 18h3s.5-1.7.8-2.8c.1-.4.2-.8.2-1.2 0-.4-.1-.8-.2-1.2l-1.4-5C20.1 6.8 19.1 6 18 6H4a2 2 0 0 0-2 2v10h3"></path>
+              <circle cx="7" cy="18" r="2"></circle>
+              <circle cx="16" cy="18" r="2"></circle>
+            </svg>
+          </div>
         </div>
       </div>
       <style>
@@ -191,10 +198,13 @@ export function BusMarker({
   const etaClock = formatArrivalClock(etaMin);
   const lastSeen = timeSince(bus.live?.last_position_at);
 
+  // Use heading if available, otherwise 0 (North)
+  const heading = bus.live?.heading ?? 0;
+
   return (
     <Marker
       position={[lat, lng]}
-      icon={createBusIcon(selected, dimmed, bookingState)}
+      icon={createBusIcon(selected, dimmed, bookingState, heading)}
       eventHandlers={{
         click: () => onSelect(bus),
       }}

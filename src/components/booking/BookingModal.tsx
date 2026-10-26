@@ -2,10 +2,10 @@
 
 import { useState, useEffect, useMemo, useRef } from "react";
 import {
-  X, Loader2, CheckCircle2, AlertCircle, Users, MapPin, Phone, User, ArrowRight, Ban
+  X, Loader2, CheckCircle2, AlertCircle, Users, MapPin, Phone, User, ArrowRight, Ban, Armchair
 } from "lucide-react";
 import {
-  requestBooking, saveActiveBooking, type BookingResponse,
+  requestBooking, saveActiveBooking, recoverActiveBooking, RequestTimeoutError, type BookingResponse,
 } from "@/lib/passengerBookingApi";
 import type { PublicBus, PublicStop } from "@/lib/passengerApi";
 import { createClient } from "@supabase/supabase-js";
@@ -46,6 +46,7 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
   const [seats, setSeats] = useState(1);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [result, setResult] = useState<BookingResponse | null>(null);
+  const [slowNet, setSlowNet] = useState(false);
 
   const [selectedSeatIds, setSelectedSeatIds] = useState<string[]>([]);
   const [dbSeats, setDbSeats] = useState<DbSeat[]>([]);
@@ -168,22 +169,12 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
 
       setDbSeats(seatsData as DbSeat[]);
 
-            // Fetch all taken seats (app bookings + walk-ups) via the safe public API
-      const { data: takenData, error: takenErr } = await supabase.rpc(
-        "get_taken_seat_ids",
-        { p_trip_id: bus.trip_id }
-      );
-      
-      if (!takenErr && takenData) {
-        setBookedSeatIds(takenData);
-      } else {
-        // Fallback just for app bookings if the RPC fails
-        const { data: bookedData } = await supabase
-          .from("booking_seats")
-          .select("seat_id")
-          .eq("trip_id", bus.trip_id);
-        setBookedSeatIds((bookedData ?? []).map((b: any) => b.seat_id));
-      }
+      // Taken seats = app bookings + walk-ups, combined by the database
+      const { data: takenIds, error: tErr } = await supabase.rpc("get_taken_seat_ids", {
+        p_trip_id: bus.trip_id,
+      });
+      if (tErr) throw new Error(`Seat availability failed: ${tErr.message}`);
+      setBookedSeatIds((takenIds as string[] | null) ?? []);
     } catch (err: any) {
       console.error("Seat Map Error:", err);
       alert(`Seat Map Error: ${err.message}`);
@@ -201,6 +192,23 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
     }
     setErrorMsg(null);
     setStage("form");
+  };
+
+  const finishSuccess = (response: BookingResponse) => {
+    if (response.handoff_id && response.booking_reference && response.pickup_id && response.expires_at) {
+      saveActiveBooking({
+        handoff_id: response.handoff_id,
+        booking_reference: response.booking_reference,
+        pickup_id: response.pickup_id,
+        token: response.token ?? "",
+        expires_at: response.expires_at,
+      });
+    }
+    confirmedRef.current = true;
+    if (response.booking_reference) logBookingConfirmed(response.booking_reference, bus.trip_id);
+    setResult(response);
+    setStage("success");
+    onSuccess(response);
   };
 
   const submit = async () => {
@@ -224,52 +232,45 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
 
     setStage("submitting");
     setErrorMsg(null);
+    setSlowNet(false);
     logBookingSubmitted(bus.trip_id, seats);
+    const slowTimer = setTimeout(() => setSlowNet(true), 8000);
+    const phone = `${PHONE_PREFIX}${phoneLocal}`;
 
     try {
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("Request timed out. Please check your connection and try again.")), 10000)
-      );
-
-      const response = await Promise.race([
-        requestBooking({
-          trip_id: bus.trip_id,
-          from_stop_id: fromStopId,
-          to_stop_id: toStopId,
-          requested_seats: seats,
-          passenger_name: name.trim() || undefined,
-          passenger_phone: `${PHONE_PREFIX}${phoneLocal}`,
-          seat_ids: selectedSeatIds.length > 0 ? selectedSeatIds : undefined,
-        }),
-        timeoutPromise
-      ]) as BookingResponse;
+      const response = await requestBooking({
+        trip_id: bus.trip_id,
+        from_stop_id: fromStopId,
+        to_stop_id: toStopId,
+        requested_seats: seats,
+        passenger_name: name.trim() || undefined,
+        passenger_phone: phone,
+        seat_ids: selectedSeatIds.length > 0 ? selectedSeatIds : undefined,
+      });
 
       if (!response.success) {
         setErrorMsg(response.error ?? "Booking failed. Please try again.");
         setStage("error");
         return;
       }
-
-      if (response.handoff_id && response.booking_reference && response.pickup_id && response.token && response.expires_at) {
-        saveActiveBooking({
-          handoff_id: response.handoff_id,
-          booking_reference: response.booking_reference,
-          pickup_id: response.pickup_id,
-          token: response.token,
-          expires_at: response.expires_at,
-        });
-      }
-
-      confirmedRef.current = true;
-      if (response.booking_reference) logBookingConfirmed(response.booking_reference, bus.trip_id);
-
-      setResult(response);
-      setStage("success");
-      onSuccess(response);
+      finishSuccess(response);
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Network error. Please try again.";
-      setErrorMsg(msg);
+      // The network failed or timed out, but the request may still have
+      // reached the server. Check before telling the passenger it failed.
+      const recovered = await recoverActiveBooking(phone);
+      if (recovered) {
+        finishSuccess(recovered);
+        return;
+      }
+      setErrorMsg(
+        e instanceof RequestTimeoutError
+          ? "Your connection is very slow and we could not confirm your request. Please check your connection and try again."
+          : "Could not reach the server. Please check your connection and try again."
+      );
       setStage("error");
+    } finally {
+      clearTimeout(slowTimer);
+      setSlowNet(false);
     }
   };
 
@@ -299,7 +300,7 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
             </button>
           )}
         </div>
-        <div className={stage === "seat-selection" ? "px-4 py-2 overflow-hidden" : "max-h-[75vh] overflow-y-auto px-4 py-4"}>
+        <div className="max-h-[75vh] overflow-y-auto px-4 py-4">
           {stage === "form" && (
             <>
               <div className="mb-4 rounded-lg border border-neutral-800 bg-neutral-900/50 p-3">
@@ -358,33 +359,9 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
               </div>
               {ENABLE_SEAT_SELECTION && (
                 <div className="mb-4">
-                  <button
-                    onClick={proceedToSeats}
-                    className={`w-full flex items-center justify-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-semibold transition-colors ${
-                      selectedSeatIds.length === seats
-                        ? "border-green-700/50 bg-green-950/20 text-green-400 hover:bg-green-950/40"
-                        : "border-neutral-700 bg-neutral-900 text-neutral-200 hover:bg-neutral-800"
-                    }`}
-                  >
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      className="h-4 w-4"
-                    >
-                      <path d="M7 10.5V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v5.5" />
-                      <path d="M5 10.5h12" />
-                      <path d="M5 14h14a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1h-2l-1 3" />
-                      <path d="M5 21v-2a1 1 0 0 1 1-1h2" />
-                      <circle cx="8" cy="18" r="1" />
-                    </svg>
-                    {selectedSeatIds.length === seats
-                      ? `${seats} Seat${seats > 1 ? "s" : ""} Selected`
-                      : `Choose ${seats} seat${seats > 1 ? "s" : ""}`}
+                  <button onClick={proceedToSeats} className={`w-full flex items-center justify-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-semibold transition-colors ${selectedSeatIds.length === seats ? "border-green-700/50 bg-green-950/20 text-green-400 hover:bg-green-950/40" : "border-neutral-700 bg-neutral-900 text-neutral-200 hover:bg-neutral-800"}`}>
+                    <Armchair className="h-4 w-4" />
+                    {selectedSeatIds.length === seats ? `${seats} Seat${seats > 1 ? "s" : ""} Selected` : `Choose ${seats} seat${seats > 1 ? "s" : ""}`}
                   </button>
                 </div>
               )}
@@ -426,6 +403,11 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
             <div className="flex flex-col items-center py-8">
               <Loader2 className="mb-3 h-8 w-8 animate-spin text-orange-500" />
               <div className="text-sm font-medium text-neutral-200">Sending request…</div>
+              {slowNet && (
+                <div className="mt-2 max-w-xs text-center text-xs text-amber-300">
+                  Slow connection. Still working, please keep this window open.
+                </div>
+              )}
             </div>
           )}
           {stage === "success" && result && (

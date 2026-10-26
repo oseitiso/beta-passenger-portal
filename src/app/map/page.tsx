@@ -414,7 +414,6 @@ export default function MapPage() {
   const lastFetchRef = useRef<number>(0);
   const fetchRef = useRef<() => void>(() => {});
 
-  // --- PROXIMITY ALERTS ---
   const [arrivalAlert, setArrivalAlert] = useState<"approaching" | "arrived" | null>(null);
   const lastAlertRef = useRef<string | null>(null);
 
@@ -426,7 +425,6 @@ export default function MapPage() {
     const bus = buses.find((b) => b.trip_code === activeBooking.trip_code || b.trip_id === (activeBooking as any).trip_id);
     if (!bus || !bus.live?.latitude || !bus.live?.longitude) return;
 
-    // Fallback to looking up the stop by ID from the bus's route stops
     const fromStopId = activeBooking.from_stop_name
       ? bus.route?.stops.find((s) => s.name === activeBooking.from_stop_name)?.stop_id
       : null;
@@ -434,8 +432,7 @@ export default function MapPage() {
     const stop = bus.route?.stops.find((s) => s.stop_id === fromStopId || s.name === activeBooking.from_stop_name);
     if (!stop || !stop.lat || !stop.lng) return;
 
-    // Haversine formula for straight-line distance
-    const R = 6371; // km
+    const R = 6371;
     const dLat = (stop.lat - bus.live.latitude) * (Math.PI / 180);
     const dLng = (stop.lng - bus.live.longitude) * (Math.PI / 180);
     const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
@@ -697,27 +694,31 @@ export default function MapPage() {
   }, [activeBooking]);
 
   // ─────────────────────────────────────────────────────────
-  // GROUP STOPS BY ZONE (village / city)
+  // GROUP STOPS BY FARE ZONE (operator-defined)
   // ─────────────────────────────────────────────────────────
   const groupedJourney = useMemo(() => {
     if (!bookedBus || !bookedBus.route?.stops) return null;
 
     const groups = new Map<string, PublicStop[]>();
     for (const stop of bookedBus.route.stops) {
-      const groupName = stop.city || stop.reverse_geocoded_name || stop.name;
-      if (!groups.has(groupName)) groups.set(groupName, []);
-      groups.get(groupName)!.push(stop);
+      const zoneKey = stop.fare_zone != null
+        ? `zone-${stop.fare_zone}`
+        : (stop.city || stop.reverse_geocoded_name || stop.name);
+      if (!groups.has(zoneKey)) groups.set(zoneKey, []);
+      groups.get(zoneKey)!.push(stop);
     }
 
     const zones = Array.from(groups.entries())
-      .map(([name, stops]) => {
+      .map(([zoneKey, stops]) => {
         const validStops = stops.filter((s) => s.lat != null && s.lng != null);
         if (validStops.length === 0) return null;
 
         const lat = validStops.reduce((sum, s) => sum + s.lat!, 0) / validStops.length;
         const lng = validStops.reduce((sum, s) => sum + s.lng!, 0) / validStops.length;
         const minOrder = Math.min(...stops.map((s) => s.order));
-        const isPassed = stops.every((s) => s.unboardable_reason === "bus_passed") && stops.some((s) => s.order < (bookedBus.route?.stops.length ?? 0));
+        const isPassed = stops.every((s) => s.unboardable_reason === "bus_passed");
+
+        const name = stops[0].city || stops[0].reverse_geocoded_name || stops[0].name;
 
         return { name, lat, lng, minOrder, isPassed };
       })
@@ -768,7 +769,6 @@ export default function MapPage() {
         </div>
       </header>
 
-      {/* Proximity Alerts */}
       {arrivalAlert && (
         <div className={`absolute left-1/2 top-20 z-[2000] flex -translate-x-1/2 items-center gap-2 rounded-full px-4 py-2 text-sm font-bold text-white shadow-lg animate-bounce ${arrivalAlert === "arrived" ? "bg-green-600" : "bg-orange-600"}`}>
           <BellRing className="h-4 w-4" />
@@ -801,6 +801,9 @@ export default function MapPage() {
             bookedTripId={bookedTripId}
             bookedState={bookedState}
             groupedJourney={groupedJourney}
+            bookedRouteStops={bookedBus?.route?.stops ?? null}
+            boardingStopName={activeBooking?.from_stop_name ?? null}
+            alightingStopName={activeBooking?.to_stop_name ?? null}
           />
 
           <div
