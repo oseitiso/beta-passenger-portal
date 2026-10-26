@@ -16,6 +16,7 @@ import {
   getActiveBuses,
   searchLocations,
   type PublicBus,
+  type PublicStop,
   type SearchedLocation,
 } from "@/lib/passengerApi";
 import { getMatchedTracks, subscribeToPassengerMapChanges, type MatchedTrack } from "@/lib/realtime";
@@ -426,10 +427,10 @@ export default function MapPage() {
     if (!bus || !bus.live?.latitude || !bus.live?.longitude) return;
 
     // Fallback to looking up the stop by ID from the bus's route stops
-    const fromStopId = activeBooking.from_stop_name 
-      ? bus.route?.stops.find((s) => s.name === activeBooking.from_stop_name)?.stop_id 
+    const fromStopId = activeBooking.from_stop_name
+      ? bus.route?.stops.find((s) => s.name === activeBooking.from_stop_name)?.stop_id
       : null;
-      
+
     const stop = bus.route?.stops.find((s) => s.stop_id === fromStopId || s.name === activeBooking.from_stop_name);
     if (!stop || !stop.lat || !stop.lng) return;
 
@@ -695,6 +696,38 @@ export default function MapPage() {
     return null;
   }, [activeBooking]);
 
+  // ─────────────────────────────────────────────────────────
+  // GROUP STOPS BY ZONE (village / city)
+  // ─────────────────────────────────────────────────────────
+  const groupedJourney = useMemo(() => {
+    if (!bookedBus || !bookedBus.route?.stops) return null;
+
+    const groups = new Map<string, PublicStop[]>();
+    for (const stop of bookedBus.route.stops) {
+      const groupName = stop.city || stop.reverse_geocoded_name || stop.name;
+      if (!groups.has(groupName)) groups.set(groupName, []);
+      groups.get(groupName)!.push(stop);
+    }
+
+    const zones = Array.from(groups.entries())
+      .map(([name, stops]) => {
+        const validStops = stops.filter((s) => s.lat != null && s.lng != null);
+        if (validStops.length === 0) return null;
+
+        const lat = validStops.reduce((sum, s) => sum + s.lat!, 0) / validStops.length;
+        const lng = validStops.reduce((sum, s) => sum + s.lng!, 0) / validStops.length;
+        const minOrder = Math.min(...stops.map((s) => s.order));
+        const isPassed = stops.every((s) => s.unboardable_reason === "bus_passed") && stops.some((s) => s.order < (bookedBus.route?.stops.length ?? 0));
+
+        return { name, lat, lng, minOrder, isPassed };
+      })
+      .filter((z): z is { name: string; lat: number; lng: number; minOrder: number; isPassed: boolean } => z !== null);
+
+    zones.sort((a, b) => a.minOrder - b.minOrder);
+
+    return zones;
+  }, [bookedBus]);
+
   const secondsAgo = lastUpdated
     ? Math.floor((Date.now() - lastUpdated.getTime()) / 1000)
     : null;
@@ -767,6 +800,7 @@ export default function MapPage() {
             focusVersion={focusVersion}
             bookedTripId={bookedTripId}
             bookedState={bookedState}
+            groupedJourney={groupedJourney}
           />
 
           <div
@@ -847,9 +881,9 @@ export default function MapPage() {
 
       {selectedBus && (
         <div className="fixed inset-0 z-[1100] flex items-center justify-center p-4 lg:hidden">
-          <div 
-            className="absolute inset-0 bg-black/40 backdrop-blur-sm" 
-            onClick={handleCloseDetail} 
+          <div
+            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            onClick={handleCloseDetail}
           />
           <div className="relative w-full max-w-sm h-[80vh] rounded-2xl overflow-hidden shadow-2xl border border-neutral-700/50">
             <BusDetailDrawer

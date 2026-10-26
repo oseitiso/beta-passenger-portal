@@ -1,11 +1,14 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   MapContainer,
   TileLayer,
   ZoomControl,
   useMap,
+  Polyline,
+  CircleMarker,
+  Tooltip,
 } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import "leaflet.markercluster/dist/MarkerCluster.css";
@@ -22,6 +25,13 @@ import { RouteLine } from "./RouteLine";
 import { MatchedTrackLine } from "./MatchedTrackLine";
 import { StopMarker } from "./StopMarker";
 
+export interface GroupedZone {
+  name: string;
+  lat: number;
+  lng: number;
+  isPassed: boolean;
+}
+
 interface PassengerMapProps {
   buses: PublicBus[];
   routes?: PublicRouteShape[];
@@ -37,6 +47,7 @@ interface PassengerMapProps {
   showStops?: boolean;
   bookedTripId?: string | null;
   bookedState?: "accepted" | "picked_up" | null;
+  groupedJourney?: GroupedZone[] | null;
 }
 
 const DEFAULT_CENTER: [number, number] = [-24.6282, 25.9231];
@@ -85,6 +96,75 @@ function MapResizeController({ layoutKey }: { layoutKey?: string | number }) {
   return null;
 }
 
+// A sub-component that fetches the road geometry for the given zones
+// and renders the polyline + zone dots once ready.
+function JourneyOverlay({ zones }: { zones: GroupedZone[] }) {
+  const [coordinates, setCoordinates] = useState<[number, number][] | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (zones.length < 2) {
+      setCoordinates(null);
+      return;
+    }
+
+    setLoading(true);
+    const stopsParam = zones.map((z) => `${z.lat},${z.lng}`).join(";");
+
+    fetch(`/api/route-geometry?stops=${encodeURIComponent(stopsParam)}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data && Array.isArray(data.coordinates) && data.coordinates.length > 0) {
+          setCoordinates(data.coordinates);
+        } else {
+          // Fallback: draw straight lines
+          setCoordinates(zones.map((z) => [z.lat, z.lng]));
+        }
+      })
+      .catch(() => {
+        // Fallback: draw straight lines
+        setCoordinates(zones.map((z) => [z.lat, z.lng]));
+      })
+      .finally(() => setLoading(false));
+  }, [zones]);
+
+  // Show the straight-line placeholder while loading so the map isn't empty
+  const drawnLine = coordinates ?? zones.map((z) => [z.lat, z.lng]);
+
+  return (
+    <>
+      <Polyline
+        positions={drawnLine}
+        color="#f97316"
+        weight={4}
+        opacity={loading ? 0.5 : 0.85}
+      />
+      {zones.map((zone, idx) => (
+        <CircleMarker
+          key={`zone-${idx}`}
+          center={[zone.lat, zone.lng]}
+          radius={zone.isPassed ? 6 : 9}
+          pathOptions={{
+            fillColor: zone.isPassed ? "#4b5563" : "#f97316",
+            fillOpacity: 1,
+            color: "#0A0A0A",
+            weight: 2,
+          }}
+        >
+          <Tooltip direction="top" offset={[0, -12]} opacity={1}>
+            <div className="text-xs font-bold text-neutral-900">
+              {zone.name}
+              {zone.isPassed && (
+                <span className="ml-1 text-[10px] text-neutral-500">(passed)</span>
+              )}
+            </div>
+          </Tooltip>
+        </CircleMarker>
+      ))}
+    </>
+  );
+}
+
 export function PassengerMap({
   buses,
   routes = [],
@@ -100,7 +180,12 @@ export function PassengerMap({
   showStops = true,
   bookedTripId = null,
   bookedState = null,
+  groupedJourney = null,
 }: PassengerMapProps) {
+  const visibleBuses = bookedTripId
+    ? buses.filter((b) => b.trip_id === bookedTripId)
+    : buses;
+
   return (
     <MapContainer
       center={DEFAULT_CENTER}
@@ -116,6 +201,10 @@ export function PassengerMap({
         maxZoom={19}
       />
 
+      {groupedJourney && groupedJourney.length > 1 && (
+        <JourneyOverlay zones={groupedJourney} />
+      )}
+
       {showRoutes &&
         routes.map((route) => (
           <RouteLine key={route.route_id} route={route} />
@@ -124,14 +213,14 @@ export function PassengerMap({
       {showStops &&
         stops.map((stop) => <StopMarker key={stop.id} stop={stop} />)}
 
-      {buses.map((bus) => bus.matched_track?.paths?.map((path, index) => (
+      {visibleBuses.map((bus) => bus.matched_track?.paths?.map((path, index) => (
         <MatchedTrackLine key={`${bus.trip_id}-${index}`} positions={path} />
       )))}
 
       <MapFocusController bus={focusBus} focusVersion={focusVersion} />
       <MapResizeController layoutKey={layoutKey} />
 
-      {buses.map((bus) => {
+      {visibleBuses.map((bus) => {
         const isSelected = bus.trip_id === selectedBusId;
         const isMatching = !matchingBusIds || matchingBusIds.has(bus.trip_id);
         const dimmed = Boolean(dimNonMatching && matchingBusIds && !isMatching);
