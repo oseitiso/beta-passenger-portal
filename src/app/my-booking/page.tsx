@@ -41,21 +41,6 @@ const TicketNotch = ({ side }: { side: "left" | "right" }) => (
   />
 );
 
-const Barcode = () => (
-  <div className="flex flex-col justify-center items-center gap-[2px] opacity-70 mix-blend-overlay">
-    {[...Array(14)].map((_, i) => (
-      <div
-        key={i}
-        className="bg-black"
-        style={{
-          height: 24,
-          width: i % 3 === 0 ? 3 : i % 2 === 0 ? 2 : 1,
-        }}
-      />
-    ))}
-  </div>
-);
-
 export default function MyBookingPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -221,68 +206,75 @@ export default function MyBookingPage() {
             <StatusBanner booking={booking} tick={tick} />
 
             {/* ───────────────────────────────────────────────────── */}
-            {/* CONDENSED TICKET UI */}
+            {/* COMPACT BOARDING-PASS TICKET */}
             {/* ───────────────────────────────────────────────────── */}
-            <div className="relative w-full rounded-xl bg-neutral-800 shadow-xl overflow-hidden">
-              <div className="absolute top-0 inset-x-0 h-1.5 bg-[radial-gradient(circle,transparent_50%,#262626_50%)] bg-[length:6px_6px] bg-repeat-x" />
-              
-              <div className="bg-yellow-500 text-black px-5 py-2.5 flex items-center justify-between">
-                <h2 className="text-sm font-black tracking-widest uppercase">{ticketTitle}</h2>
-                <div className="font-mono text-[10px] font-bold opacity-70">B-ETA</div>
+            <div className="relative w-full overflow-hidden rounded-2xl border border-neutral-700/60 bg-neutral-900 shadow-xl">
+              {/* Header strip */}
+              <div className="flex items-center justify-between bg-gradient-to-r from-yellow-500 to-orange-500 px-4 py-1.5 text-black">
+                <h2 className="text-[11px] font-black uppercase tracking-[0.2em]">{ticketTitle}</h2>
+                <span className="text-[10px] font-extrabold tracking-widest opacity-70">B-ETA</span>
               </div>
 
-              <div className="px-5 py-4 flex flex-col md:flex-row gap-4 items-center">
-                
-                <div className="flex-1 w-full space-y-3">
-                  <div className="flex justify-between items-end border-b border-neutral-700/50 pb-2">
-                    <div>
-                      <div className="text-[9px] text-neutral-400 uppercase tracking-widest">Passenger</div>
-                      <div className="text-sm font-bold text-white leading-tight">{booking.passenger_name ?? "—"}</div>
+              {/* Journey: FROM ●┄┄🚌┄┄● TO, with the seat badge on the right */}
+              <div className="flex items-center gap-3 px-4 pt-3 pb-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[9px] font-semibold uppercase tracking-widest text-neutral-500">From</div>
+                      <div className="truncate text-base font-bold leading-tight text-white">
+                        {booking.from_stop_name ?? booking.route_origin ?? "—"}
+                      </div>
                     </div>
-                    <div className="text-right">
-                      <div className="text-[9px] text-neutral-400 uppercase tracking-widest">Seat</div>
-                      <div className="text-lg font-black text-orange-500 leading-tight">{booking.seat_numbers?.join(", ") ?? "—"}</div>
-                    </div>
-                  </div>
 
-                  <div className="grid grid-cols-2 gap-x-4 gap-y-3">
-                    <div>
-                      <div className="text-[9px] text-neutral-400 uppercase tracking-widest flex items-center gap-1"><MapPin size={9}/> From</div>
-                      <div className="text-xs font-medium text-white mt-0.5">{booking.from_stop_name ?? booking.route_origin ?? "—"}</div>
+                    <div className="flex w-12 flex-shrink-0 items-center">
+                      <span className="h-1.5 w-1.5 rounded-full bg-orange-500" />
+                      <span className="h-px flex-1 border-t border-dashed border-neutral-500" />
+                      <span className="h-1.5 w-1.5 rounded-full bg-orange-500" />
                     </div>
-                    <div>
-                      <div className="text-[9px] text-neutral-400 uppercase tracking-widest flex items-center gap-1"><MapPin size={9}/> To</div>
-                      <div className="text-xs font-medium text-white mt-0.5">{booking.to_stop_name ?? booking.route_destination ?? "—"}</div>
-                    </div>
-                    <div>
-                      <div className="text-[9px] text-neutral-400 uppercase tracking-widest">Route</div>
-                      <div className="text-xs font-medium text-white mt-0.5">{booking.route_name ?? "—"}</div>
-                    </div>
-                    <div>
-                      <div className="text-[9px] text-neutral-400 uppercase tracking-widest">Trip Code</div>
-                      <div className="text-xs font-mono text-neutral-300 mt-0.5">{booking.trip_code ?? "—"}</div>
-                    </div>
-                  </div>
 
-                  <div className="pt-1 flex items-center justify-between border-t border-neutral-700/50">
-                    <div className="text-[9px] text-neutral-400 uppercase tracking-widest">Ref</div>
-                    <div className="font-mono text-xs text-white">{booking.booking_reference}</div>
+                    <div className="min-w-0 flex-1 text-right">
+                      <div className="text-[9px] font-semibold uppercase tracking-widest text-neutral-500">To</div>
+                      <div className="truncate text-base font-bold leading-tight text-white">
+                        {booking.to_stop_name ?? booking.route_destination ?? "—"}
+                      </div>
+                    </div>
                   </div>
                 </div>
 
-                <div className="relative w-px h-24 bg-neutral-600 border-l border-dashed border-neutral-400 hidden md:block">
-                   <TicketNotch side="left" />
-                </div>
-
-                <div className="w-full md:w-20 flex flex-row md:flex-col items-center justify-center gap-2 py-2 md:py-0">
-                  <Barcode />
-                  <div className="text-center">
-                     <div className="text-[7px] text-neutral-500 uppercase tracking-widest mt-1">Scan</div>
+                <div className="flex h-14 w-14 flex-shrink-0 flex-col items-center justify-center rounded-xl border border-orange-500/40 bg-orange-500/10">
+                  <div className="text-[8px] font-semibold uppercase tracking-widest text-orange-300/80">Seat</div>
+                  <div className="text-xl font-black leading-none text-orange-400">
+                    {booking.seat_numbers?.join(", ") ?? "—"}
                   </div>
                 </div>
               </div>
 
-              <div className="absolute bottom-0 inset-x-0 h-1.5 bg-[radial-gradient(circle,transparent_50%,#262626_50%)] bg-[length:6px_6px] bg-repeat-x" />
+              {/* Perforated divider with side notches */}
+              <div className="relative h-0">
+                <div className="absolute inset-x-4 top-0 border-t border-dashed border-neutral-600" />
+                <TicketNotch side="left" />
+                <TicketNotch side="right" />
+              </div>
+
+              {/* Details */}
+              <div className="grid grid-cols-2 gap-x-4 gap-y-2 px-4 py-3 sm:grid-cols-4">
+                <div className="min-w-0">
+                  <div className="text-[9px] uppercase tracking-widest text-neutral-500">Passenger</div>
+                  <div className="truncate text-xs font-semibold text-white">{booking.passenger_name ?? "—"}</div>
+                </div>
+                <div className="min-w-0">
+                  <div className="text-[9px] uppercase tracking-widest text-neutral-500">Route</div>
+                  <div className="truncate text-xs font-semibold text-white">{booking.route_name ?? "—"}</div>
+                </div>
+                <div className="min-w-0">
+                  <div className="text-[9px] uppercase tracking-widest text-neutral-500">Trip code</div>
+                  <div className="truncate font-mono text-[11px] text-neutral-300">{booking.trip_code ?? "—"}</div>
+                </div>
+                <div className="min-w-0">
+                  <div className="text-[9px] uppercase tracking-widest text-neutral-500">Ref</div>
+                  <div className="truncate font-mono text-[11px] font-bold text-orange-300">{booking.booking_reference}</div>
+                </div>
+              </div>
             </div>
             {/* ───────────────────────────────────────────────────── */}
 

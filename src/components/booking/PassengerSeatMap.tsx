@@ -92,26 +92,28 @@ export function PassengerSeatMap({
     }
   };
 
-  const topChrome = 140;
-  const bottomPadding = 40;
-  const gapY = 6;
+  // Fit the WHOLE bus on screen with no scrolling.
+  // Everything around the seats (page margin, modal header, driver row, legend,
+  // Back/Confirm buttons, bus walls) takes roughly FIXED_CHROME pixels, and the
+  // driver row is one more seat-high. The rest is shared between all the rows.
+  const FIXED_CHROME = 330;
+  const gapY = 4;
   const totalRows = Math.max(rows.length, 1);
-  const availableH = Math.max(200, height - topChrome - bottomPadding);
-
+  const availableH = Math.max(160, height - FIXED_CHROME);
   const seatByHeight = Math.floor(
-    (availableH - (totalRows - 1) * gapY) / totalRows - 4
+    (availableH - totalRows * gapY) / (totalRows + 1)
   );
 
   const totalCols = leftCols + rightCols;
-  const aisleW = 16;
+  const aisleW = 14;
   const gapX = 4;
   const availableW = Math.min(width - 60, 360);
   const seatByWidth = Math.floor(
     (availableW - aisleW - totalCols * gapX) / totalCols
   );
 
-  const seatSize = Math.max(20, Math.min(48, seatByHeight, seatByWidth));
-  const fontSize = Math.max(8, Math.round(seatSize * 0.32));
+  const seatSize = Math.max(14, Math.min(44, seatByHeight, seatByWidth));
+  const fontSize = Math.max(7, Math.round(seatSize * 0.34));
 
   const SeatButton = ({ seat }: { seat: DbSeat }) => {
     const isBooked = bookedSeatIds.includes(seat.id);
@@ -133,7 +135,7 @@ export function PassengerSeatMap({
         style={{ width: seatSize, height: seatSize, fontSize }}
         title={isBooked ? `Seat ${seat.seat_number} (Booked)` : `Seat ${seat.seat_number}`}
       >
-        {seatSize >= 26 && (
+        {seatSize >= 30 && (
           <div className="absolute top-1 left-1 right-1 h-1 rounded-full bg-white/10" />
         )}
         <span style={{ fontWeight: 700 }}>{seat.seat_number}</span>
@@ -142,14 +144,14 @@ export function PassengerSeatMap({
   };
 
   return (
-    <div className="flex flex-col items-center w-full py-2">
+    <div className="flex flex-col items-center w-full py-0">
       {/* CHANGED: p-0 and w-max to kiss the walls */}
       <div
-        className="relative flex flex-col w-max rounded-t-[40px] rounded-b-xl border-x-4 border-t-4 border-neutral-700 bg-neutral-900/40 pt-3 pb-4 shadow-inner"
+        className="relative flex flex-col w-max rounded-t-[40px] rounded-b-xl border-x-4 border-t-4 border-neutral-700 bg-neutral-900/40 pt-2 pb-2 shadow-inner"
         style={{ maxWidth: 380 }}
       >
         <div
-          className={`flex w-full items-center justify-between px-1 pb-3 mb-2 border-b-2 border-dashed border-neutral-800 ${
+          className={`flex w-full items-center justify-between px-1 pb-2 mb-1.5 border-b-2 border-dashed border-neutral-800 ${
             driverSide === "RIGHT" ? "flex-row-reverse" : "flex-row"
           }`}
         >
@@ -185,7 +187,7 @@ export function PassengerSeatMap({
         </div>
       </div>
 
-      <div className="mt-3 flex flex-wrap items-center justify-center gap-3 text-[10px] text-neutral-500">
+      <div className="mt-2 flex flex-wrap items-center justify-center gap-3 text-[10px] text-neutral-500">
         <div className="flex items-center gap-1.5">
           <div className="h-3 w-3 rounded-sm bg-orange-600 border border-orange-500" />
           <span>Selected</span>

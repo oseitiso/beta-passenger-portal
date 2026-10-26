@@ -14,7 +14,7 @@ import {
   Navigation,
   Compass,
 } from "lucide-react";
-import type { PublicBus } from "@/lib/passengerApi";
+import { operatorLogoUrl, type PublicBus } from "@/lib/passengerApi";
 import { reverseGeocode } from "@/lib/geo";
 
 interface BusDetailDrawerProps {
@@ -75,6 +75,7 @@ export function BusDetailDrawer({
   onBookSeat,
 }: BusDetailDrawerProps) {
   const [, setTick] = useState(0);
+  const [logoFailed, setLogoFailed] = useState(false);
 
   useEffect(() => {
     const t = setInterval(() => setTick((v) => v + 1), 1000);
@@ -109,6 +110,9 @@ export function BusDetailDrawer({
     };
   }, [lat, lng]);
 
+  const operatorId = bus.vehicle?.operator_id ?? null;
+  const operatorName = bus.vehicle?.operator_name ?? null;
+  const showLogo = Boolean(operatorId && bus.vehicle?.operator_has_logo) && !logoFailed;
   const plate = bus.vehicle?.registration_plate ?? "Unknown";
   const origin = bus.route?.origin ?? "Unknown";
   const destination = bus.route?.destination ?? "Unknown";
@@ -171,6 +175,24 @@ export function BusDetailDrawer({
                 {plate}
               </div>
             </div>
+            {(operatorName || showLogo) && (
+              <div className="mt-2 flex items-center gap-2">
+                {showLogo && operatorId && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={operatorLogoUrl(operatorId)}
+                    alt={operatorName ?? "Operator logo"}
+                    onError={() => setLogoFailed(true)}
+                    className="h-7 max-w-[88px] rounded bg-white object-contain p-0.5"
+                  />
+                )}
+                {operatorName && (
+                  <span className="truncate text-xs font-semibold text-neutral-200">
+                    {operatorName}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         </div>
         <button

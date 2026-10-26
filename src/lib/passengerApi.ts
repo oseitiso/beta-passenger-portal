@@ -65,6 +65,10 @@ export interface PublicBus {
     photo_url: string | null;
     capacity: number | null;
     passenger_count: number;
+    /** Operator that runs this bus (from passenger-api v2.7). */
+    operator_id?: string | null;
+    operator_name?: string | null;
+    operator_has_logo?: boolean;
   };
   status: string;
   segment_availability?: {
@@ -80,6 +84,11 @@ export interface SearchedLocation {
   lat: number;
   lng: number;
   source: "stop_lookup" | "forward_geocode";
+}
+
+/** Address of an operator's uploaded logo image (cached by the browser). */
+export function operatorLogoUrl(operatorId: string): string {
+  return `${API_BASE}/operator-logo/${operatorId}`;
 }
 
 async function get<T>(path: string): Promise<T> {

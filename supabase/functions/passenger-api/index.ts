@@ -1,7 +1,10 @@
-// B-ETA Passenger API Edge Function — v2.6
+// B-ETA Passenger API Edge Function — v2.7
 // Deploy to: hzmpncdygkeqvoszunfm
 // Public-facing API for the passenger portal. Returns ONLY public bus data.
 //
+// v2.7 — Each bus now carries its operator (id, name, has_logo). The logo image
+//        itself is served separately by GET /operator-logo/:operatorId so the
+//        bus list stays small and the browser can cache the image.
 // v2.6 — Stops now include fare_zone and fare_zone_distance_km so the
 //        passenger map can group stops into operator-defined fare zones.
 // v2.5 — Added vehicle_type and primary_colour to the JSON payload
@@ -75,6 +78,9 @@ interface PublicTrip {
     capacity: number | null;
     vehicle_type: string | null;
     primary_colour: string | null;
+      operator_id: string | null;
+      operator_name: string | null;
+      operator_has_logo: boolean | null;
     passenger_count: number;
   };
   status: string;
@@ -350,6 +356,9 @@ async function fetchActiveTrips(opts: {
       vehicle_capacity: number | null;
       vehicle_type: string | null;
       primary_colour: string | null;
+      operator_id: string | null;
+      operator_name: string | null;
+      operator_has_logo: boolean | null;
       passenger_count: number | null;
       current_passenger_count: number | null;
       lat: number | null;
@@ -374,6 +383,9 @@ async function fetchActiveTrips(opts: {
       v.capacity as vehicle_capacity,
       v.vehicle_type as vehicle_type,
       v.primary_colour as primary_colour,
+      v.operator_id as operator_id,
+      o.name as operator_name,
+      (o.settings is not null and coalesce(o.settings->>'logo', '') <> '') as operator_has_logo,
       t.passenger_count,
       t.current_passenger_count,
       vcs.latitude as lat,
@@ -404,6 +416,7 @@ async function fetchActiveTrips(opts: {
     from trips t
     left join routes r on r.id = t.route_id
     left join vehicles v on v.id = t.vehicle_id
+    left join operators o on o.id = v.operator_id
     left join vehicle_current_state vcs on vcs.vehicle_id = t.vehicle_id
     where t.status = 'IN_PROGRESS'
       AND vcs.latitude is not null
@@ -508,6 +521,9 @@ async function fetchActiveTrips(opts: {
         capacity: t.vehicle_capacity,
         vehicle_type: t.vehicle_type ?? null,
         primary_colour: t.primary_colour ?? null,
+        operator_id: t.operator_id ?? null,
+        operator_name: t.operator_name ?? null,
+        operator_has_logo: t.operator_has_logo === true,
         passenger_count: t.current_passenger_count ?? t.passenger_count ?? 0,
       },
       status: t.status,
@@ -580,7 +596,7 @@ serve(async (req: Request) => {
     if (pathname === "/health" || pathname === "/") {
       return ok({
         status: "B-ETA Passenger API active",
-        version: "2.6.0",
+        version: "2.7.0",
       });
     }
 
@@ -603,6 +619,30 @@ serve(async (req: Request) => {
       return ok({ buses, count: buses.length });
     }
 
+    const logoMatch = pathname.match(/^\/operator-logo\/([0-9a-fA-F-]{36})$/);
+    if (logoMatch) {
+      const rows = await sql<{ logo: string | null }[]>`
+        select settings->>'logo' as logo
+        from operators
+        where id = ${logoMatch[1]}::uuid
+        limit 1
+      `;
+      const dataUrl = rows[0]?.logo ?? "";
+      const m = dataUrl.match(/^data:(image\/(?:png|jpeg));base64,(.+)$/);
+      if (!m) return err("Logo not found", 404);
+      const bin = atob(m[2]);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return new Response(bytes, {
+        status: 200,
+        headers: {
+          ...corsHeaders,
+          "Content-Type": m[1],
+          "Cache-Control": "public, max-age=3600",
+        },
+      });
+    }
+
     const busMatch = pathname.match(/^\/buses\/([^/]+)$/);
     if (busMatch) {
       const tripId = busMatch[1];
@@ -621,6 +661,9 @@ serve(async (req: Request) => {
           vehicle_capacity: number | null;
           vehicle_type: string | null;
           primary_colour: string | null;
+      operator_id: string | null;
+      operator_name: string | null;
+      operator_has_logo: boolean | null;
           passenger_count: number | null;
           current_passenger_count: number | null;
           lat: number | null;
@@ -645,6 +688,9 @@ serve(async (req: Request) => {
           v.capacity as vehicle_capacity,
           v.vehicle_type as vehicle_type,
           v.primary_colour as primary_colour,
+      v.operator_id as operator_id,
+      o.name as operator_name,
+      (o.settings is not null and coalesce(o.settings->>'logo', '') <> '') as operator_has_logo,
           t.passenger_count,
           t.current_passenger_count,
           vcs.latitude as lat,
@@ -675,6 +721,7 @@ serve(async (req: Request) => {
         from trips t
         left join routes r on r.id = t.route_id
         left join vehicles v on v.id = t.vehicle_id
+    left join operators o on o.id = v.operator_id
         left join vehicle_current_state vcs on vcs.vehicle_id = t.vehicle_id
         where t.id = ${tripId}::uuid
           and t.status = 'IN_PROGRESS'
@@ -724,6 +771,9 @@ serve(async (req: Request) => {
           capacity: t.vehicle_capacity,
           vehicle_type: t.vehicle_type ?? null,
           primary_colour: t.primary_colour ?? null,
+        operator_id: t.operator_id ?? null,
+        operator_name: t.operator_name ?? null,
+        operator_has_logo: t.operator_has_logo === true,
           passenger_count: t.current_passenger_count ?? t.passenger_count ?? 0,
         },
         status: t.status,

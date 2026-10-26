@@ -166,11 +166,13 @@ function JourneyOverlay({
   stops,
   currentZoom,
   busPos,
+  alightPos,
 }: {
   zones: GroupedZone[];
   stops: PublicStop[] | null;
   currentZoom: number;
   busPos: [number, number] | null;
+  alightPos: [number, number] | null;
 }) {
   const [coordinates, setCoordinates] = useState<[number, number][] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -284,6 +286,18 @@ function JourneyOverlay({
     () => splitAtBus(drawnLine, busLat != null && busLng != null ? [busLat, busLng] : null),
     [drawnLine, busLat, busLng]
   );
+
+  // With a confirmed booking, only the part of the road the passenger will
+  // actually travel stays orange (bus -> alighting stop). Everything after the
+  // alighting stop, up to the route's last stop, turns grey.
+  const aLat = alightPos ? alightPos[0] : null;
+  const aLng = alightPos ? alightPos[1] : null;
+  const { travel, beyond } = useMemo(() => {
+    if (aLat == null || aLng == null) return { travel: ahead, beyond: [] as [number, number][] };
+    const cut = splitAtBus(ahead, [aLat, aLng]);
+    if (cut.behind.length < 2) return { travel: ahead, beyond: [] as [number, number][] };
+    return { travel: cut.behind, beyond: cut.ahead };
+  }, [ahead, aLat, aLng]);
   const showIndividualStops = currentZoom >= 12 && stops && stops.length > 0;
 
   return (
@@ -297,7 +311,10 @@ function JourneyOverlay({
           dashArray="8 10"
         />
       )}
-      <Polyline positions={ahead} color="#f97316" weight={6} opacity={loading ? 0.5 : 0.95} />
+      {beyond.length > 1 && (
+        <Polyline positions={beyond} color="#6b7280" weight={5} opacity={0.85} />
+      )}
+      <Polyline positions={travel} color="#f97316" weight={6} opacity={loading ? 0.5 : 0.95} />
       
       {showIndividualStops ? (
         stops!.map((stop, idx) => {
@@ -480,6 +497,11 @@ export function PassengerMap({
           stops={bookedRouteStops}
           currentZoom={currentZoom}
           busPos={bookedBusPos}
+          alightPos={
+            alightingStop
+              ? [alightingStop.lat as number, alightingStop.lng as number]
+              : null
+          }
         />
       )}
 
