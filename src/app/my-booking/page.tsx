@@ -284,9 +284,9 @@ export default function MyBookingPage() {
               </div>
 
               {/* Details */}
-              <div className="grid grid-cols-2 gap-x-4 gap-y-2 px-4 py-3 sm:grid-cols-4">
+              <div className="grid grid-cols-2 gap-x-4 gap-y-2 px-4 py-3 sm:grid-cols-3">
                 {(booking.seat_numbers?.length ?? 0) > 2 && (
-                  <div className="col-span-2 min-w-0 sm:col-span-4">
+                  <div className="col-span-2 min-w-0 sm:col-span-3">
                     <div className="text-[9px] uppercase tracking-widest text-neutral-500">Seat numbers</div>
                     <div className="break-words text-xs font-semibold text-orange-300">
                       {formatSeatNumbers(booking.seat_numbers)}
@@ -296,6 +296,17 @@ export default function MyBookingPage() {
                 <div className="min-w-0">
                   <div className="text-[9px] uppercase tracking-widest text-neutral-500">Passenger</div>
                   <div className="truncate text-xs font-semibold text-white">{booking.passenger_name ?? "—"}</div>
+                </div>
+                <div className="min-w-0">
+                  <div className="text-[9px] uppercase tracking-widest text-neutral-500">Operator</div>
+                  <div className="truncate text-xs font-semibold text-white">{booking.operator_name ?? "—"}</div>
+                </div>
+                <div className="min-w-0">
+                  <div className="text-[9px] uppercase tracking-widest text-neutral-500">Bus</div>
+                  <div className="truncate font-mono text-xs font-bold text-white">{booking.vehicle_registration ?? "—"}</div>
+                  {booking.vehicle_description && (
+                    <div className="truncate text-[10px] text-neutral-500">{booking.vehicle_description}</div>
+                  )}
                 </div>
                 <div className="min-w-0">
                   <div className="text-[9px] uppercase tracking-widest text-neutral-500">Route</div>

@@ -41,7 +41,10 @@ export interface BookingDetail {
   trip_code?: string | null;
   pickup_missed_reason?: string | null;
   pickup_disruption_flag?: boolean | null;
-  seat_numbers?: (number | string)[] | null; // <-- ADDED THIS LINE
+  seat_numbers?: (number | string)[] | null;
+  operator_name?: string | null;
+  vehicle_registration?: string | null;
+  vehicle_description?: string | null;
 }
 
 /**

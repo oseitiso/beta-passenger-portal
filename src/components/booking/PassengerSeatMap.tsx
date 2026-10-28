@@ -31,9 +31,7 @@ interface PassengerSeatMapProps {
   seatConfig: any;
 }
 
-type Slot = DbSeat | "AISLE" | "GAP";
-
-const MIRROR_FOR_RHD = false;
+type Slot = DbSeat | "GAP";
 
 export function PassengerSeatMap({
   seats,
@@ -50,38 +48,85 @@ export function PassengerSeatMap({
   const rightCols: number = seatConfig?.rightCols ?? 3;
   const firstRowLeft: number = seatConfig?.firstRowLeft ?? leftCols;
   const firstRowRight: number = seatConfig?.firstRowRight ?? rightCols;
-  const mainRows: number | null = seatConfig?.rows ?? null;
+  const secondRowLeft: number = seatConfig?.secondRowLeft ?? leftCols;
+  const secondRowRight: number = seatConfig?.secondRowRight ?? rightCols;
+  const mainRows: number = seatConfig?.rows ?? 12;
+  const backSeats: number = seatConfig?.backseats ?? 0;
+  const driverInline = seatConfig?.driverInline ?? false;
+  const isDriverLeft = driverSide === "LEFT";
 
-  const rows = useMemo(() => {
-    const map = new Map<number, DbSeat[]>();
-    for (const seat of seats) {
-      if (!map.has(seat.row_number)) map.set(seat.row_number, []);
-      map.get(seat.row_number)!.push(seat);
+  // Create a lookup map for seats
+  const seatMap = useMemo(() => {
+    const map = new Map<string, DbSeat>();
+    for (const s of seats) {
+      map.set(`${s.row_number}-${s.column_number}`, s);
     }
-    return Array.from(map.entries())
-      .sort((a, b) => a[0] - b[0])
-      .map(([rowNumber, rowSeats]) => ({
-        rowNumber,
-        seats: [...rowSeats].sort((a, b) => a.column_number - b.column_number),
-      }));
+    return map;
   }, [seats]);
 
-  const buildSlots = (rowNumber: number, rowSeats: DbSeat[]): Slot[] => {
-    const isBackRow = mainRows !== null && rowNumber > mainRows;
-    if (isBackRow) return rowSeats;
-    const isFirst = rowNumber === 1;
-    const leftN = isFirst ? firstRowLeft : leftCols;
-    const rightN = isFirst ? firstRowRight : rightCols;
-    const byCol = new Map(rowSeats.map((s) => [s.column_number, s]));
-    const left: Slot[] = Array.from({ length: leftCols }, (_, i) =>
-      i < leftN ? byCol.get(i + 1) ?? "GAP" : "GAP"
-    );
-    const rightGap = rightCols - rightN;
-    const right: Slot[] = Array.from({ length: rightCols }, (_, i) =>
-      i >= rightGap ? byCol.get(leftN + (i - rightGap) + 1) ?? "GAP" : "GAP"
-    );
-    return [...left, "AISLE", ...right];
-  };
+  // Build the visual layout exactly like the Operator Portal
+  const layout = useMemo(() => {
+    const map: { row: number; left: Slot[]; right: Slot[]; isBack: boolean }[] = [];
+    
+    let currentDbRow = 1;
+
+    for (let r = 1; r <= mainRows; r++) {
+      let currentLeftCols = r === 1 ? firstRowLeft : (r === 2 ? secondRowLeft : leftCols);
+      let currentRightCols = r === 1 ? firstRowRight : (r === 2 ? secondRowRight : rightCols);
+
+      const isFirst = r === 1;
+      const showInlineDriverLeft = isFirst && driverInline && isDriverLeft;
+      const showInlineDriverRight = isFirst && driverInline && !isDriverLeft;
+
+      // If it's the first row AND the driver is inline, we remove 1 seat slot visually
+      if (r === 1 && driverInline) {
+        if (isDriverLeft) {
+          currentLeftCols = Math.max(0, currentLeftCols - 1);
+        } else {
+          currentRightCols = Math.max(0, currentRightCols - 1);
+        }
+      }
+
+      const leftSlots: Slot[] = [];
+      const rightSlots: Slot[] = [];
+
+      // Find the left seats in DB (start at column 1)
+      for (let c = 1; c <= currentLeftCols; c++) {
+        const seat = seatMap.get(`${currentDbRow}-${c}`);
+        leftSlots.push(seat ?? "GAP");
+      }
+
+      // Find the right seats in DB
+      for (let c = 1; c <= currentRightCols; c++) {
+        let seat = seatMap.get(`${currentDbRow}-${currentLeftCols + c}`);
+        // If driver is inline right, the DB might have skipped column 1
+        if (!seat && r === 1 && driverInline && !isDriverLeft) {
+           seat = seatMap.get(`${currentDbRow}-${c + 1}`);
+        }
+        rightSlots.push(seat ?? "GAP");
+      }
+
+      map.push({ 
+        row: r, 
+        left: leftSlots, 
+        right: rightSlots, 
+        isBack: false 
+      });
+      currentDbRow++;
+    }
+
+    // Back Bench
+    if (backSeats > 0) {
+      const backRowSlots: Slot[] = [];
+      for (let c = 1; c <= backSeats; c++) {
+        const seat = seatMap.get(`${currentDbRow}-${c}`);
+        backRowSlots.push(seat ?? "GAP");
+      }
+      map.push({ row: currentDbRow, left: backRowSlots, right: [], isBack: true });
+    }
+
+    return map;
+  }, [seatMap, leftCols, rightCols, firstRowLeft, firstRowRight, secondRowLeft, secondRowRight, mainRows, backSeats, driverInline, isDriverLeft]);
 
   const handleSeatClick = (seatId: string) => {
     if (bookedSeatIds.includes(seatId)) return;
@@ -92,32 +137,25 @@ export function PassengerSeatMap({
     }
   };
 
-  // Fit the WHOLE bus on screen with no scrolling.
-  // Everything around the seats (page margin, modal header, driver row, legend,
-  // Back/Confirm buttons, bus walls) takes roughly FIXED_CHROME pixels, and the
-  // driver row is one more seat-high. The rest is shared between all the rows.
   const FIXED_CHROME = 330;
   const gapY = 4;
-  const totalRows = Math.max(rows.length, 1);
+  const totalRows = Math.max(layout.length, 1);
   const availableH = Math.max(160, height - FIXED_CHROME);
   const seatByHeight = Math.floor(
-    (availableH - totalRows * gapY) / (totalRows + 1)
+    (availableH - totalRows * gapY) / (totalRows + (driverInline ? 0 : 1))
   );
 
-  const totalCols = leftCols + rightCols;
+  const maxCols = Math.max(leftCols + rightCols, backSeats, 1);
   const aisleW = 14;
   const gapX = 4;
   const availableW = Math.min(width - 60, 360);
   const seatByWidth = Math.floor(
-    (availableW - aisleW - totalCols * gapX) / totalCols
+    (availableW - aisleW - maxCols * gapX) / maxCols
   );
 
   const seatSize = Math.max(14, Math.min(44, seatByHeight, seatByWidth));
   const fontSize = Math.max(7, Math.round(seatSize * 0.34));
 
-  // Top-down seat, like a seat plan drawn from above: a big cushion with a
-  // narrow backrest (and headrest) behind it. The bus faces up the screen, so
-  // the backrest sits at the bottom of each seat.
   const SeatButton = ({ seat }: { seat: DbSeat }) => {
     const isBooked = bookedSeatIds.includes(seat.id);
     const isSelected = selectedSeatIds.includes(seat.id);
@@ -148,7 +186,6 @@ export function PassengerSeatMap({
         }}
         title={isBooked ? `Seat ${seat.seat_number} (Booked)` : `Seat ${seat.seat_number}`}
       >
-        {/* Backrest */}
         <div
           className="absolute"
           style={{
@@ -175,7 +212,6 @@ export function PassengerSeatMap({
             />
           )}
         </div>
-        {/* Cushion */}
         <div
           className="absolute flex items-center justify-center"
           style={{
@@ -197,44 +233,81 @@ export function PassengerSeatMap({
     );
   };
 
+  const DriverWheel = () => (
+    <div
+      className="flex items-center justify-center rounded-full border-2 border-neutral-600 bg-neutral-800 text-neutral-500 shadow-md shrink-0"
+      style={{ width: seatSize, height: seatSize }}
+    >
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: seatSize * 0.5, height: seatSize * 0.5 }}>
+        <circle cx="12" cy="12" r="10" />
+        <path d="M12 12v8" />
+        <path d="M12 12H2" />
+        <path d="M12 12h10" />
+      </svg>
+    </div>
+  );
+
   return (
     <div className="flex flex-col items-center w-full py-0">
-      {/* CHANGED: p-0 and w-max to kiss the walls */}
       <div
-        className="relative flex flex-col w-max rounded-t-[40px] rounded-b-xl border-x-4 border-t-4 border-neutral-700 bg-neutral-900/40 pt-2 pb-2 shadow-inner"
+        className="relative flex flex-col w-max rounded-t-[40px] rounded-b-xl border-x-4 border-t-4 border-neutral-700 bg-neutral-900/40 p-1 pt-2 pb-2 shadow-inner"
         style={{ maxWidth: 380 }}
       >
-        <div
-          className={`flex w-full items-center justify-between px-1 pb-2 mb-1.5 border-b-2 border-dashed border-neutral-800 ${
-            driverSide === "RIGHT" ? "flex-row-reverse" : "flex-row"
-          }`}
-        >
+        {/* Top driver row (only if NOT inline) */}
+        {!driverInline && (
           <div
-            className="flex items-center justify-center rounded-full border-2 border-neutral-600 bg-neutral-800 text-neutral-500 shadow-md"
-            style={{ width: seatSize, height: seatSize }}
+            className={`flex w-full items-center justify-between px-1 pb-2 mb-1.5 border-b-2 border-dashed border-neutral-800 ${
+              isDriverLeft ? "flex-row" : "flex-row-reverse"
+            }`}
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: seatSize * 0.5, height: seatSize * 0.5 }}>
-              <circle cx="12" cy="12" r="10" />
-              <path d="M12 12v8" />
-              <path d="M12 12H2" />
-              <path d="M12 12h10" />
-            </svg>
+            <DriverWheel />
+            <div className="bg-red-500/20 border border-red-500/30 rounded" style={{ height: 6, width: seatSize * 1.2 }} />
           </div>
-          <div className="bg-red-500/20 border border-red-500/30 rounded" style={{ height: 6, width: seatSize * 1.2 }} />
-        </div>
+        )}
 
+        {/* Rows */}
         <div className="flex flex-col w-full items-center" style={{ gap: gapY }}>
-          {rows.map((row) => {
-            let items = buildSlots(row.rowNumber, row.seats);
-            if (MIRROR_FOR_RHD && driverSide === "RIGHT") items = [...items].reverse();
+          {layout.map((rowObj) => {
+            if (rowObj.isBack) {
+              return (
+                <div
+                  key={`back-${rowObj.row}`}
+                  className="flex items-center justify-center w-full mt-2 pt-2 border-t-2 border-dashed border-neutral-800"
+                  style={{ gap: gapX }}
+                >
+                  {rowObj.left.map((slot, i) => {
+                    if (slot === "GAP") return <div key={`gap-${i}`} style={{ width: seatSize, height: seatSize }} />;
+                    return <SeatButton key={slot.id} seat={slot} />;
+                  })}
+                </div>
+              );
+            }
+
+            const isFirstRow = rowObj.row === 1;
+            const showDriverLeft = isFirstRow && driverInline && isDriverLeft;
+            const showDriverRight = isFirstRow && driverInline && !isDriverLeft;
 
             return (
-              <div key={row.rowNumber} className="flex items-center justify-center" style={{ gap: gapX }}>
-                {items.map((item, index) => {
-                  if (item === "AISLE") return <div key={`a${index}`} style={{ width: aisleW }} />;
-                  if (item === "GAP") return <div key={`g${row.rowNumber}-${index}`} style={{ width: seatSize, height: seatSize }} />;
-                  return <SeatButton key={item.id} seat={item} />;
-                })}
+              <div
+                key={rowObj.row}
+                className="flex w-full justify-between items-center px-1"
+                style={{ gap: aisleW }}
+              >
+                <div className="flex items-center" style={{ gap: gapX }}>
+                  {showDriverLeft && <DriverWheel />}
+                  {rowObj.left.map((slot, i) => {
+                    if (slot === "GAP") return <div key={`gap-${i}`} style={{ width: seatSize, height: seatSize }} />;
+                    return <SeatButton key={slot.id} seat={slot} />;
+                  })}
+                </div>
+
+                <div className="flex items-center" style={{ gap: gapX }}>
+                  {rowObj.right.map((slot, i) => {
+                    if (slot === "GAP") return <div key={`gap-${i}`} style={{ width: seatSize, height: seatSize }} />;
+                    return <SeatButton key={slot.id} seat={slot} />;
+                  })}
+                  {showDriverRight && <DriverWheel />}
+                </div>
               </div>
             );
           })}

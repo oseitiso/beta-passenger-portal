@@ -54,6 +54,8 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
   const [loadingSeats, setLoadingSeats] = useState(false);
   const [driverSide, setDriverSide] = useState<"LEFT" | "RIGHT">("RIGHT");
   const [seatConfig, setSeatConfig] = useState<any>(null);
+  // true = the operator has not created a seat map for this bus yet
+  const [noSeatMap, setNoSeatMap] = useState(false);
 
   const confirmedRef = useRef(false);
   const abandonedFiredRef = useRef(false);
@@ -136,6 +138,35 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
     setPhoneLocal(digits);
   };
 
+  // Find out up front whether this bus has a seat map, so the passenger is
+  // never sent to a seat picker that cannot open.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const plate = bus.vehicle?.registration_plate;
+        if (!plate) return;
+        const { data: v } = await supabase
+          .from("vehicles")
+          .select("id")
+          .eq("registration_plate", plate)
+          .maybeSingle();
+        if (!v?.id || cancelled) return;
+        const { count, error } = await supabase
+          .from("vehicle_seats")
+          .select("id", { count: "exact", head: true })
+          .eq("vehicle_id", v.id);
+        if (cancelled || error) return;
+        setNoSeatMap((count ?? 0) === 0);
+      } catch {
+        // If this check fails, fall back to the normal seat picker.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [bus.vehicle?.registration_plate]);
+
   const proceedToSeats = async () => {
     setStage("seat-selection");
     setLoadingSeats(true);
@@ -165,7 +196,13 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
         .order("seat_number", { ascending: true });
 
       if (sErr) throw new Error(`Seat fetch failed: ${sErr.message}`);
-      if (!seatsData || seatsData.length === 0) throw new Error("This vehicle has no seats generated yet.");
+      if (!seatsData || seatsData.length === 0) {
+        // No seat map made by the operator: book without choosing a seat.
+        setNoSeatMap(true);
+        setSelectedSeatIds([]);
+        setStage("form");
+        return;
+      }
 
       setDbSeats(seatsData as DbSeat[]);
 
@@ -177,7 +214,6 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
       setBookedSeatIds((takenIds as string[] | null) ?? []);
     } catch (err: any) {
       console.error("Seat Map Error:", err);
-      alert(`Seat Map Error: ${err.message}`);
       setErrorMsg("Could not load seat map: " + err.message);
       setStage("form");
     } finally {
@@ -281,7 +317,7 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
     Boolean(fromStop) && Boolean(toStop) &&
     fromStop!.boardable === true &&
     routeStops.findIndex((s) => s.stop_id === toStopId) > routeStops.findIndex((s) => s.stop_id === fromStopId) &&
-    (!ENABLE_SEAT_SELECTION || selectedSeatIds.length === seats);
+    (!ENABLE_SEAT_SELECTION || noSeatMap || selectedSeatIds.length === seats);
 
   const journeyReady = Boolean(fromStop) && Boolean(toStop);
 
@@ -357,7 +393,15 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
                   <button onClick={() => setSeats((s) => Math.min(10, s + 1))} disabled={seats >= 10} className="flex h-9 w-9 items-center justify-center rounded-lg border border-neutral-700 text-neutral-200 transition-colors hover:bg-neutral-800 disabled:opacity-40">+</button>
                 </div>
               </div>
-              {ENABLE_SEAT_SELECTION && (
+              {ENABLE_SEAT_SELECTION && noSeatMap && (
+                <div className="mb-4 flex items-start gap-2 rounded-lg border border-neutral-700 bg-neutral-900 p-3 text-xs text-neutral-300">
+                  <Armchair className="mt-0.5 h-4 w-4 flex-shrink-0 text-neutral-400" />
+                  <span>
+                    This bus has no seat map yet, so you cannot pick a seat. The driver will assign your seat{seats > 1 ? "s" : ""} when you board.
+                  </span>
+                </div>
+              )}
+              {ENABLE_SEAT_SELECTION && !noSeatMap && (
                 <div className="mb-4">
                   <button onClick={proceedToSeats} className={`w-full flex items-center justify-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-semibold transition-colors ${selectedSeatIds.length === seats ? "border-green-700/50 bg-green-950/20 text-green-400 hover:bg-green-950/40" : "border-neutral-700 bg-neutral-900 text-neutral-200 hover:bg-neutral-800"}`}>
                     <Armchair className="h-4 w-4" />

@@ -1,4 +1,5 @@
-// B-ETA Passenger Booking API v1.3
+// B-ETA Passenger Booking API v1.3.1
+// v1.3.1: GET /booking/status also returns operator_name, vehicle_registration, vehicle_description.
 // Public-facing passenger booking endpoints. No auth required.
 //
 // Endpoints:
@@ -58,7 +59,7 @@ async function parseJsonBody(req: Request): Promise<any | null> {
 async function handleHealth(): Promise<Response> {
   return ok({
     status: "B-ETA Passenger Booking API active",
-    version: "1.3.0",
+    version: "1.3.1",
     timestamp: new Date().toISOString(),
   });
 }
@@ -146,6 +147,7 @@ async function handleStatus(url: URL): Promise<Response> {
     const rows = await sql`
       select
         h.id as handoff_id,
+        h.trip_id,
         h.booking_reference,
         h.status as handoff_status,
         h.booking_pin,
@@ -171,6 +173,8 @@ async function handleStatus(url: URL): Promise<Response> {
         p.disruption_flag as pickup_disruption_flag,
         t.trip_code,
         t.status as trip_status,
+        t.operator_id,
+        t.vehicle_id,
         r.name as route_name,
         r.origin as route_origin,
         r.destination as route_destination
@@ -186,7 +190,44 @@ async function handleStatus(url: URL): Promise<Response> {
 
     if (rows.length === 0) return err("Booking not found", 404);
 
-    return ok({ success: true, booking: rows[0] });
+    const booking: any = rows[0];
+
+    // Bus and operator shown on the ticket. Looked up separately, so the
+    // ticket still loads if either lookup fails.
+    try {
+      if (booking.vehicle_id) {
+        const v = await sql`
+          select registration_plate, make, model
+          from vehicles where id = ${booking.vehicle_id}::uuid limit 1
+        `;
+        booking.vehicle_registration = v[0]?.registration_plate ?? null;
+        booking.vehicle_description =
+          [v[0]?.make, v[0]?.model].filter(Boolean).join(" ") || null;
+      }
+    } catch (e) {
+      console.error("[booking/status] vehicle lookup failed:", e);
+    }
+    try {
+      if (booking.operator_id) {
+        const o = await sql`
+          select coalesce(
+            to_jsonb(o)->>'name',
+            to_jsonb(o)->>'company_name',
+            to_jsonb(o)->>'display_name',
+            to_jsonb(o)->>'trading_name'
+          ) as name
+          from operators o where o.id = ${booking.operator_id}::uuid limit 1
+        `;
+        booking.operator_name = o[0]?.name ?? null;
+      }
+    } catch (e) {
+      console.error("[booking/status] operator lookup failed:", e);
+    }
+    // internal ids are not needed by the passenger app
+    delete booking.operator_id;
+    delete booking.vehicle_id;
+
+    return ok({ success: true, booking });
   } catch (e: any) {
     return err(e?.message ?? "Internal error", 500);
   }
