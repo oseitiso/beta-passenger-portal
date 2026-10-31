@@ -14,14 +14,117 @@ import {
   Navigation,
   Compass,
 } from "lucide-react";
-import { operatorLogoUrl, type PublicBus } from "@/lib/passengerApi";
+import { operatorLogoUrl, type PublicBus, type PublicStop } from "@/lib/passengerApi";
 import { reverseGeocode } from "@/lib/geo";
+
+/** The passenger's active booking, as returned by the booking status endpoint. */
+export interface DrawerBooking {
+  handoff_status?: string | null;
+  trip_id?: string | null;
+  trip_code?: string | null;
+  from_stop_id?: string | null;
+  to_stop_id?: string | null;
+  from_stop_name?: string | null;
+  to_stop_name?: string | null;
+}
 
 interface BusDetailDrawerProps {
   bus: PublicBus;
+  booking?: DrawerBooking | null;
   onClose: () => void;
   onCenter?: (bus: PublicBus) => void;
   onBookSeat?: (bus: PublicBus) => void;
+}
+
+type TargetMode = "trip" | "pickup" | "dropoff";
+
+interface EtaTarget {
+  mode: TargetMode;
+  stopName: string | null;
+  km: number | null;
+  eta: number | null;
+  atStop: boolean;
+  passed: boolean;
+}
+
+function findStop(
+  stops: PublicStop[],
+  id?: string | null,
+  name?: string | null
+): PublicStop | null {
+  if (id) {
+    const byId = stops.find((s) => s.stop_id === id);
+    if (byId) return byId;
+  }
+  if (name) {
+    const n = name.trim().toLowerCase();
+    return stops.find((s) => s.name.trim().toLowerCase() === n) ?? null;
+  }
+  return null;
+}
+
+/**
+ * Works out what the "arrives in" figures should refer to.
+ *  - Seat acknowledged (ACCEPTED): distance and ETA to the passenger's boarding stop.
+ *  - Boarded (PICKED_UP): distance and ETA to the passenger's destination stop.
+ *  - Anything else: the whole trip, as before.
+ * The bus reports distance and ETA to the final stop, so the figures for an
+ * intermediate stop come from the stop's distance along the route.
+ */
+function computeTarget(
+  bus: PublicBus,
+  booking: DrawerBooking | null | undefined,
+  remainingKm: number | null,
+  etaMin: number | null
+): EtaTarget {
+  const whole: EtaTarget = {
+    mode: "trip",
+    stopName: null,
+    km: remainingKm,
+    eta: etaMin,
+    atStop: false,
+    passed: false,
+  };
+  if (!booking || !bus.route?.stops?.length || remainingKm == null) return whole;
+
+  const sameTrip =
+    (booking.trip_id && booking.trip_id === bus.trip_id) ||
+    (booking.trip_code && booking.trip_code === bus.trip_code);
+  if (!sameTrip) return whole;
+
+  const status = String(booking.handoff_status ?? "").toUpperCase();
+  let mode: TargetMode;
+  let stop: PublicStop | null;
+  if (status === "ACCEPTED") {
+    mode = "pickup";
+    stop = findStop(bus.route.stops, booking.from_stop_id, booking.from_stop_name);
+  } else if (status === "PICKED_UP") {
+    mode = "dropoff";
+    stop = findStop(bus.route.stops, booking.to_stop_id, booking.to_stop_name);
+  } else {
+    return whole;
+  }
+  if (!stop || stop.distance_from_origin_km == null) return whole;
+
+  const routeLen = Math.max(
+    ...bus.route.stops.map((s) => s.distance_from_origin_km ?? 0)
+  );
+  if (!(routeLen > 0)) return whole;
+
+  const travelled = Math.max(0, routeLen - remainingKm);
+  const raw = stop.distance_from_origin_km - travelled;
+  const km = Math.max(0, raw);
+  const eta =
+    etaMin != null && remainingKm > 0 ? etaMin * (km / remainingKm) : km === 0 ? 0 : null;
+
+  return {
+    mode,
+    stopName: stop.name,
+    km,
+    eta,
+    atStop: km < 0.15,
+    passed: raw < -1,
+  };
 }
 
 function timeSince(iso: string | null | undefined): string {
@@ -70,6 +173,7 @@ function getVehicleImage(type?: string | null) {
 
 export function BusDetailDrawer({
   bus,
+  booking,
   onClose,
   onCenter,
   onBookSeat,
@@ -127,8 +231,17 @@ export function BusDetailDrawer({
 
   const remainingKm = bus.live?.distance_remaining_km ?? null;
   const etaMin = bus.live?.eta_minutes ?? null;
-  const etaHuman = formatEtaHuman(etaMin);
-  const etaClock = formatArrivalClock(etaMin);
+  const target = computeTarget(bus, booking, remainingKm, etaMin);
+  const personal = target.mode !== "trip";
+  const shownKm = target.km;
+  const etaHuman = formatEtaHuman(target.eta);
+  const etaClock = formatArrivalClock(target.eta);
+  const stopLabel = target.stopName ?? "your stop";
+  const heroLabel = !personal
+    ? "ARRIVES IN"
+    : target.mode === "pickup"
+    ? `ARRIVES AT YOUR PICKUP IN`
+    : `ARRIVES AT YOUR DESTINATION IN`;
 
   const occupancyPct =
     capacity && capacity > 0
@@ -192,25 +305,46 @@ export function BusDetailDrawer({
       </div>
 
       {/* ETA hero block */}
-      {etaHuman && (
+      {(etaHuman || (personal && (target.atStop || target.passed))) && (
         <div className="flex-shrink-0 border-b border-neutral-800 bg-gradient-to-br from-orange-600/10 to-orange-600/5 px-4 py-4">
           <div className="flex items-center gap-1.5 text-xs font-medium text-orange-400">
             <Clock className="h-3 w-3" />
-            ARRIVES IN
+            {heroLabel}
           </div>
-          <div className="mt-1 flex items-baseline gap-2">
-            <span className="text-3xl font-bold text-orange-500">
-              {etaHuman}
-            </span>
-            {etaClock && (
-              <span className="text-sm font-medium text-orange-400/80">
-                · {etaClock}
+          {personal && target.stopName && (
+            <div className="mt-1 text-sm font-semibold text-neutral-100">
+              {target.stopName}
+            </div>
+          )}
+          {personal && target.passed ? (
+            <div className="mt-1 text-xl font-bold text-red-400">
+              Bus has passed {stopLabel}
+            </div>
+          ) : personal && target.atStop ? (
+            <div className="mt-1 text-2xl font-bold text-green-400">
+              {target.mode === "pickup" ? "Bus is at your stop" : "Arriving now"}
+            </div>
+          ) : (
+            <div className="mt-1 flex items-baseline gap-2">
+              <span className="text-3xl font-bold text-orange-500">
+                {etaHuman}
               </span>
-            )}
-          </div>
-          {remainingKm != null && (
+              {etaClock && (
+                <span className="text-sm font-medium text-orange-400/80">
+                  · {etaClock}
+                </span>
+              )}
+            </div>
+          )}
+          {shownKm != null && !target.passed && (
             <div className="mt-1 text-xs text-neutral-400">
-              {remainingKm.toFixed(1)} km remaining
+              {shownKm.toFixed(1)} km remaining
+              {personal ? ` to ${stopLabel}` : ""}
+            </div>
+          )}
+          {personal && remainingKm != null && (
+            <div className="mt-1 text-[11px] text-neutral-500">
+              Whole trip: {remainingKm.toFixed(1)} km to {destination}
             </div>
           )}
           {bus.map_position?.source === "road-matched" && (
@@ -285,8 +419,14 @@ export function BusDetailDrawer({
         />
         <Stat
           icon={<Clock className="h-4 w-4" />}
-          label="ETA"
-          value={etaHuman ?? "None"}
+          label={personal ? `ETA to ${stopLabel}` : "ETA"}
+          value={
+            personal && target.passed
+              ? "Passed"
+              : personal && target.atStop
+              ? "Now"
+              : etaHuman ?? "None"
+          }
         />
       </div>
 
@@ -331,13 +471,15 @@ export function BusDetailDrawer({
       </div>
 
       {/* Distance remaining */}
-      {remainingKm != null && (
+      {shownKm != null && (
         <div className="flex-shrink-0 border-b border-neutral-800 px-4 py-4">
           <div className="mb-2 text-xs font-medium text-neutral-500">
-            DISTANCE REMAINING
+            {personal
+              ? `DISTANCE TO ${stopLabel.toUpperCase()}`
+              : "DISTANCE REMAINING"}
           </div>
           <div className="text-lg font-semibold text-neutral-100">
-            {remainingKm.toFixed(1)} km
+            {shownKm.toFixed(1)} km
           </div>
         </div>
       )}

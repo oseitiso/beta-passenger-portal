@@ -1,4 +1,5 @@
-// B-ETA Passenger Booking API v1.4.0
+// B-ETA Passenger Booking API v1.5.0
+// v1.5.0: POST /booking/find looks a booking up from a new device. It needs the booking reference AND the full phone number used to book; a wrong pair looks exactly like an unknown reference and counts toward the rate limit.
 // v1.4.0: SECURITY. Ticket lookup hides driver id and masks the phone; /booking/recover needs the device anonymous_id and returns only live bookings; wrong-reference guessing is rate limited (20 misses per 10 minutes per visitor, then 15 minutes blocked).
 // v1.3.1: GET /booking/status also returns operator_name, vehicle_registration, vehicle_description.
 // Public-facing passenger booking endpoints. No auth required.
@@ -7,7 +8,8 @@
 //   POST /booking/request  - request a seat (supports seat_ids)
 //   POST /booking/cancel   - cancel a booking
 //   GET  /booking/status   - get booking details by reference
-//   POST /booking/recover  - find bookings by phone
+//   POST /booking/recover  - find bookings by phone (same device only)
+//   POST /booking/find     - find a booking by reference + phone (any device)
 //   GET  /health           - health check
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -60,7 +62,7 @@ async function parseJsonBody(req: Request): Promise<any | null> {
 async function handleHealth(): Promise<Response> {
   return ok({
     status: "B-ETA Passenger Booking API active",
-    version: "1.3.1",
+    version: "1.5.0",
     timestamp: new Date().toISOString(),
   });
 }
@@ -176,10 +178,30 @@ async function recordMiss(key: string): Promise<void> {
   }
 }
 
+function lastEightDigits(v: unknown): string {
+  return String(v ?? "").replace(/\D/g, "").slice(-8);
+}
+
 async function handleStatus(url: URL, req: Request): Promise<Response> {
   const reference = url.searchParams.get("reference");
   if (!reference) return err("Missing query parameter: reference");
+  return await lookupBooking(reference, req, null);
+}
 
+async function handleFind(body: any, req: Request): Promise<Response> {
+  const reference = String(body?.reference ?? "").trim();
+  const phone = lastEightDigits(body?.passenger_phone);
+  if (!reference || phone.length !== 8) {
+    return err("Enter the booking reference and the 8-digit phone number used to book.");
+  }
+  return await lookupBooking(reference, req, phone);
+}
+
+async function lookupBooking(
+  reference: string,
+  req: Request,
+  phone: string | null
+): Promise<Response> {
   const key = clientKey(req);
   if (await tooManyMisses(key)) {
     return err("Too many unknown booking references. Please wait a few minutes and try again.", 429);
@@ -235,6 +257,13 @@ async function handleStatus(url: URL, req: Request): Promise<Response> {
     }
 
     const booking: any = rows[0];
+
+    // A lookup from a new device must also prove the phone number. A wrong
+    // number is answered exactly like an unknown reference.
+    if (phone !== null && lastEightDigits(booking.passenger_phone) !== phone) {
+      await recordMiss(key);
+      return err("Booking not found", 404);
+    }
 
     // Bus and operator shown on the ticket. Looked up separately, so the
     // ticket still loads if either lookup fails.
@@ -362,6 +391,12 @@ serve(async (req: Request) => {
 
     if (pathname === "/booking/status" && req.method === "GET") {
       return await handleStatus(url, req);
+    }
+
+    if (pathname === "/booking/find" && req.method === "POST") {
+      const body = await parseJsonBody(req);
+      if (!body) return err("Invalid JSON body");
+      return await handleFind(body, req);
     }
 
     if (pathname === "/booking/recover" && req.method === "POST") {

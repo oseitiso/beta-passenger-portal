@@ -24,6 +24,8 @@ import {
 import {
   getActiveBooking,
   getBookingStatus,
+  findBooking,
+  saveActiveBooking,
   cancelBooking,
   clearActiveBooking,
   getBookingHistory,
@@ -63,6 +65,103 @@ const TicketNotch = ({ side }: { side: "left" | "right" }) => (
     }`}
   />
 );
+
+function FindBookingForm({ onFound }: { onFound: () => void }) {
+  const [reference, setReference] = useState("");
+  const [phoneDigits, setPhoneDigits] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const canSubmit = reference.trim().length > 0 && phoneDigits.length === 8 && !busy;
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!canSubmit) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const res = await findBooking(reference, `+267${phoneDigits}`);
+      if (res.success && res.booking) {
+        saveActiveBooking({
+          handoff_id: res.booking.handoff_id,
+          booking_reference: res.booking.booking_reference,
+          pickup_id: "",
+          token: "",
+          expires_at: res.booking.expires_at,
+        });
+        onFound();
+      } else {
+        setMessage(
+          res.error === "Booking not found"
+            ? "We could not find a booking with those details. Check the reference and the phone number used to book."
+            : res.error ?? "We could not find a booking with those details."
+        );
+      }
+    } catch {
+      setMessage("The connection failed. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form
+      onSubmit={submit}
+      className="mt-6 rounded-xl border border-neutral-800 bg-neutral-900/40 p-4 text-left"
+    >
+      <div className="text-sm font-semibold text-neutral-100">
+        Booked on another phone?
+      </div>
+      <div className="mt-1 text-xs text-neutral-400">
+        Enter the booking reference and the phone number you booked with to bring your booking to this device.
+      </div>
+
+      <label className="mt-3 block text-[11px] font-medium uppercase tracking-wide text-neutral-500">
+        Booking reference
+      </label>
+      <input
+        value={reference}
+        onChange={(e) => setReference(e.target.value)}
+        autoCapitalize="characters"
+        autoComplete="off"
+        className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 font-mono text-sm text-neutral-100 focus:border-orange-500 focus:outline-none"
+      />
+
+      <label className="mt-3 block text-[11px] font-medium uppercase tracking-wide text-neutral-500">
+        Phone number
+      </label>
+      <div className="mt-1 flex items-stretch gap-2">
+        <div className="flex items-center rounded-lg border border-neutral-700 bg-neutral-800 px-3 text-sm text-neutral-300">
+          +267
+        </div>
+        <input
+          value={phoneDigits}
+          onChange={(e) => setPhoneDigits(e.target.value.replace(/\D/g, "").slice(0, 8))}
+          inputMode="numeric"
+          maxLength={8}
+          autoComplete="tel-national"
+          className="min-w-0 flex-1 rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 focus:border-orange-500 focus:outline-none"
+        />
+      </div>
+
+      {message && (
+        <div className="mt-3 flex items-start gap-2 text-xs text-red-300">
+          <AlertCircle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+          <span>{message}</span>
+        </div>
+      )}
+
+      <button
+        type="submit"
+        disabled={!canSubmit}
+        className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-orange-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-orange-500 disabled:cursor-not-allowed disabled:bg-neutral-800 disabled:text-neutral-500"
+      >
+        {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+        Find my booking
+      </button>
+    </form>
+  );
+}
 
 export default function MyBookingPage() {
   const [loading, setLoading] = useState(true);
@@ -221,6 +320,7 @@ export default function MyBookingPage() {
             <div className="text-lg font-semibold">No active booking</div>
             <div className="mt-2 text-sm text-neutral-400">Go to the map to request a seat on a live bus.</div>
             <Link href="/map" className="mt-4 inline-block rounded-lg bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-500">Find a bus</Link>
+            <FindBookingForm onFound={() => loadBooking()} />
           </div>
         )}
 

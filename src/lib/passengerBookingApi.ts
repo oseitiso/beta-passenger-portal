@@ -261,6 +261,23 @@ export async function getBookingStatus(
   );
 }
 
+/**
+ * Find a booking from a device that has nothing saved (for example after a
+ * lost phone). Needs the booking reference and the phone number used to book.
+ */
+export async function findBooking(
+  bookingReference: string,
+  phone: string
+): Promise<{ success: boolean; booking?: BookingDetail; error?: string }> {
+  return request(`/booking/find`, {
+    method: "POST",
+    body: JSON.stringify({
+      reference: bookingReference.trim(),
+      passenger_phone: phone,
+    }),
+  });
+}
+
 export async function cancelBooking(
   handoffId: string
 ): Promise<{ success: boolean; error?: string }> {

@@ -874,6 +874,7 @@ export default function MapPage() {
           <aside className="hidden w-96 flex-shrink-0 overflow-hidden border-l border-neutral-800 bg-neutral-950 lg:block">
             <BusDetailDrawer
               bus={selectedBus}
+              booking={activeBooking}
               onClose={handleCloseDetail}
               onCenter={handleCenter}
               onBookSeat={handleOpenBooking}
@@ -891,6 +892,7 @@ export default function MapPage() {
           <div className="relative w-full max-w-sm h-[80vh] rounded-2xl overflow-hidden shadow-2xl border border-neutral-700/50">
             <BusDetailDrawer
               bus={selectedBus}
+              booking={activeBooking}
               onClose={handleCloseDetail}
               onCenter={handleCenter}
               onBookSeat={handleOpenBooking}
