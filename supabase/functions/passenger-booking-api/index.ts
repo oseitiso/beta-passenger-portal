@@ -1,4 +1,5 @@
-// B-ETA Passenger Booking API v1.3.1
+// B-ETA Passenger Booking API v1.4.0
+// v1.4.0: SECURITY. Ticket lookup hides driver id and masks the phone; /booking/recover needs the device anonymous_id and returns only live bookings; wrong-reference guessing is rate limited (20 misses per 10 minutes per visitor, then 15 minutes blocked).
 // v1.3.1: GET /booking/status also returns operator_name, vehicle_registration, vehicle_description.
 // Public-facing passenger booking endpoints. No auth required.
 //
@@ -139,9 +140,50 @@ async function handleCancel(body: any): Promise<Response> {
   }
 }
 
-async function handleStatus(url: URL): Promise<Response> {
+const MISS_LIMIT = 20;
+const MISS_WINDOW_MIN = 10;
+
+function clientKey(req: Request): string {
+  const h = req.headers;
+  const ip =
+    h.get("cf-connecting-ip") ||
+    (h.get("x-forwarded-for") || "").split(",")[0].trim() ||
+    h.get("x-real-ip") ||
+    "unknown";
+  return ip.slice(0, 64);
+}
+
+async function tooManyMisses(key: string): Promise<boolean> {
+  try {
+    const r = await sql`
+      select count(*)::int as n from public.lookup_misses
+      where client_key = ${key} and at > now() - (${MISS_WINDOW_MIN} || ' minutes')::interval`;
+    return (r[0]?.n ?? 0) >= MISS_LIMIT;
+  } catch (e) {
+    console.error("[rate-limit] check failed (allowing):", e);
+    return false; // never block honest passengers because the limiter itself failed
+  }
+}
+
+async function recordMiss(key: string): Promise<void> {
+  try {
+    await sql`insert into public.lookup_misses (client_key) values (${key})`;
+    if (Math.random() < 0.02) {
+      await sql`delete from public.lookup_misses where at < now() - interval '1 hour'`;
+    }
+  } catch (e) {
+    console.error("[rate-limit] record failed:", e);
+  }
+}
+
+async function handleStatus(url: URL, req: Request): Promise<Response> {
   const reference = url.searchParams.get("reference");
   if (!reference) return err("Missing query parameter: reference");
+
+  const key = clientKey(req);
+  if (await tooManyMisses(key)) {
+    return err("Too many unknown booking references. Please wait a few minutes and try again.", 429);
+  }
 
   try {
     const rows = await sql`
@@ -168,7 +210,6 @@ async function handleStatus(url: URL): Promise<Response> {
           where bs.booking_id = h.id) as seat_numbers,
         p.id as pickup_id,
         p.status as pickup_status,
-        p.driver_id,
         p.missed_reason as pickup_missed_reason,
         p.disruption_flag as pickup_disruption_flag,
         t.trip_code,
@@ -188,7 +229,10 @@ async function handleStatus(url: URL): Promise<Response> {
       limit 1
     `;
 
-    if (rows.length === 0) return err("Booking not found", 404);
+    if (rows.length === 0) {
+      await recordMiss(key);
+      return err("Booking not found", 404);
+    }
 
     const booking: any = rows[0];
 
@@ -226,6 +270,11 @@ async function handleStatus(url: URL): Promise<Response> {
     // internal ids are not needed by the passenger app
     delete booking.operator_id;
     delete booking.vehicle_id;
+    // the ticket page only needs a masked phone (last 3 digits)
+    if (booking.passenger_phone) {
+      const ph = String(booking.passenger_phone);
+      booking.passenger_phone = ph.length > 3 ? "*".repeat(ph.length - 3) + ph.slice(-3) : "***";
+    }
 
     return ok({ success: true, booking });
   } catch (e: any) {
@@ -234,8 +283,10 @@ async function handleStatus(url: URL): Promise<Response> {
 }
 
 async function handleRecover(body: any): Promise<Response> {
-  if (!body.passenger_phone) {
-    return err("Missing required field: passenger_phone");
+  // The caller must prove it is the device that made the booking: the random
+  // anonymous_id held only by that browser. A phone number alone is not enough.
+  if (!body.passenger_phone || !body.anonymous_id) {
+    return err("Missing required fields: passenger_phone, anonymous_id");
   }
 
   try {
@@ -246,7 +297,6 @@ async function handleRecover(body: any): Promise<Response> {
         h.status as handoff_status,
         h.booking_pin,
         h.passenger_name,
-        h.passenger_phone,
         h.requested_seats,
         h.from_stop_id,
         h.to_stop_id,
@@ -256,7 +306,6 @@ async function handleRecover(body: any): Promise<Response> {
         h.expires_at,
         p.id as pickup_id,
         p.status as pickup_status,
-        p.driver_id,
         p.missed_reason as pickup_missed_reason,
         p.disruption_flag as pickup_disruption_flag,
         t.trip_code,
@@ -269,8 +318,10 @@ async function handleRecover(body: any): Promise<Response> {
       left join trips t on t.id = h.trip_id
       left join routes r on r.id = t.route_id
       where h.passenger_phone = ${body.passenger_phone}
+        and to_jsonb(h)->>'anonymous_id' = ${String(body.anonymous_id)}
+        and (h.status = 'ACCEPTED' or (h.status = 'PENDING' and h.expires_at > now()))
       order by h.created_at desc
-      limit 10
+      limit 3
     `;
 
     return ok({ success: true, bookings: rows, count: rows.length });
@@ -310,7 +361,7 @@ serve(async (req: Request) => {
     }
 
     if (pathname === "/booking/status" && req.method === "GET") {
-      return await handleStatus(url);
+      return await handleStatus(url, req);
     }
 
     if (pathname === "/booking/recover" && req.method === "POST") {

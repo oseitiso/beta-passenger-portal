@@ -56,6 +56,8 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
   const [seatConfig, setSeatConfig] = useState<any>(null);
   // true = the operator has not created a seat map for this bus yet
   const [noSeatMap, setNoSeatMap] = useState(false);
+  // true = the last attempt failed because someone else took a chosen seat
+  const [seatConflict, setSeatConflict] = useState(false);
 
   const confirmedRef = useRef(false);
   const abandonedFiredRef = useRef(false);
@@ -167,6 +169,40 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
     };
   }, [bus.vehicle?.registration_plate]);
 
+  // Reload which seats are taken and drop any of the passenger's chosen seats
+  // that someone else has taken in the meantime.
+  // A seat only counts as taken if someone holds it over the stretch of road
+  // this passenger wants, so the same seat can be sold A-C and again D-F.
+  const fetchTakenIds = () =>
+    fromStopId && toStopId
+      ? supabase.rpc("get_taken_seat_ids_for_segment", {
+          p_trip_id: bus.trip_id,
+          p_from_stop_id: fromStopId,
+          p_to_stop_id: toStopId,
+        })
+      : supabase.rpc("get_taken_seat_ids", { p_trip_id: bus.trip_id });
+
+  const refreshTakenSeats = async (): Promise<string[] | null> => {
+    try {
+      const { data, error } = await fetchTakenIds();
+      if (error) return null;
+      const ids = (data as string[] | null) ?? [];
+      setBookedSeatIds(ids);
+      setSelectedSeatIds((prev) => prev.filter((id) => !ids.includes(id)));
+      return ids;
+    } catch {
+      return null;
+    }
+  };
+
+  // Keep the seat map live while the passenger is choosing.
+  useEffect(() => {
+    if (stage !== "seat-selection" || loadingSeats) return;
+    const t = setInterval(() => { void refreshTakenSeats(); }, 5000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stage, loadingSeats, bus.trip_id, fromStopId, toStopId]);
+
   const proceedToSeats = async () => {
     setStage("seat-selection");
     setLoadingSeats(true);
@@ -207,11 +243,11 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
       setDbSeats(seatsData as DbSeat[]);
 
       // Taken seats = app bookings + walk-ups, combined by the database
-      const { data: takenIds, error: tErr } = await supabase.rpc("get_taken_seat_ids", {
-        p_trip_id: bus.trip_id,
-      });
+      const { data: takenIds, error: tErr } = await fetchTakenIds();
       if (tErr) throw new Error(`Seat availability failed: ${tErr.message}`);
-      setBookedSeatIds((takenIds as string[] | null) ?? []);
+      const taken = (takenIds as string[] | null) ?? [];
+      setBookedSeatIds(taken);
+      setSelectedSeatIds((prev) => prev.filter((id) => !taken.includes(id)));
     } catch (err: any) {
       console.error("Seat Map Error:", err);
       setErrorMsg("Could not load seat map: " + err.message);
@@ -268,6 +304,7 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
 
     setStage("submitting");
     setErrorMsg(null);
+    setSeatConflict(false);
     setSlowNet(false);
     logBookingSubmitted(bus.trip_id, seats);
     const slowTimer = setTimeout(() => setSlowNet(true), 8000);
@@ -285,7 +322,15 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
       });
 
       if (!response.success) {
-        setErrorMsg(response.error ?? "Booking failed. Please try again.");
+        const msg = response.error ?? "Booking failed. Please try again.";
+        if (/seat/i.test(msg) && /(taken|booked|unavailable)/i.test(msg)) {
+          // Lost the race: free the contested seats and show them as taken.
+          await refreshTakenSeats();
+          setSeatConflict(true);
+          setErrorMsg("Someone else just booked one or more of your seats. Please choose different seats.");
+        } else {
+          setErrorMsg(msg);
+        }
         setStage("error");
         return;
       }
@@ -470,7 +515,11 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
               <AlertCircle className="mx-auto mb-3 h-12 w-12 text-red-500" />
               <div className="text-lg font-bold text-neutral-100">Booking failed</div>
               <div className="mt-2 text-sm text-neutral-400">{errorMsg}</div>
-              <button onClick={() => setStage("form")} className="mt-4 w-full rounded-lg bg-orange-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-orange-500">Try again</button>
+              {seatConflict ? (
+                <button onClick={proceedToSeats} className="mt-4 w-full rounded-lg bg-orange-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-orange-500">Choose different seats</button>
+              ) : (
+                <button onClick={() => setStage("form")} className="mt-4 w-full rounded-lg bg-orange-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-orange-500">Try again</button>
+              )}
             </div>
           )}
         </div>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useEffect, useState } from "react";
+import { aisleMode, buildRows, layoutMetrics } from "@/lib/seatLayout";
 
 function useWindowDimensions() {
   const [dims, setDims] = useState({ width: 0, height: 0 });
@@ -18,7 +19,7 @@ export interface DbSeat {
   seat_number: number;
   row_number: number;
   column_number: number;
-  seat_type: "FRONT" | "WINDOW" | "AISLE" | "BACK" | "STANDARD";
+  seat_type: "FRONT" | "WINDOW" | "AISLE" | "BACK" | "STANDARD" | "JUMP";
 }
 
 interface PassengerSeatMapProps {
@@ -31,8 +32,6 @@ interface PassengerSeatMapProps {
   seatConfig: any;
 }
 
-type Slot = DbSeat | "GAP";
-
 export function PassengerSeatMap({
   seats,
   selectedSeatIds,
@@ -44,95 +43,27 @@ export function PassengerSeatMap({
 }: PassengerSeatMapProps) {
   const { width, height } = useWindowDimensions();
 
-  const leftCols: number = seatConfig?.leftCols ?? 2;
-  const rightCols: number = seatConfig?.rightCols ?? 3;
-  const firstRowLeft: number = seatConfig?.firstRowLeft ?? leftCols;
-  const firstRowRight: number = seatConfig?.firstRowRight ?? rightCols;
-  const secondRowLeft: number = seatConfig?.secondRowLeft ?? leftCols;
-  const secondRowRight: number = seatConfig?.secondRowRight ?? rightCols;
-  const mainRows: number = seatConfig?.rows ?? 12;
-  const backSeats: number = seatConfig?.backseats ?? 0;
   const driverInline = seatConfig?.driverInline ?? false;
   const isDriverLeft = driverSide === "LEFT";
+  const aisle = aisleMode(seatConfig);
 
-  // Create a lookup map for seats
-  const seatMap = useMemo(() => {
-    const map = new Map<string, DbSeat>();
-    for (const s of seats) {
-      map.set(`${s.row_number}-${s.column_number}`, s);
-    }
-    return map;
-  }, [seats]);
+  // One shared layout rule: the same bus is drawn in the editor, the live
+  // seat map, this picker and the driver app.
+  const layoutConfig = useMemo(() => ({ ...(seatConfig ?? {}), driverSide }), [seatConfig, driverSide]);
+  const layout = useMemo(() => buildRows(seats, layoutConfig), [seats, layoutConfig]);
+  const hasJump = useMemo(() => seats.some((s) => s.seat_type === "JUMP"), [seats]);
 
-  // Build the visual layout exactly like the Operator Portal
-  const layout = useMemo(() => {
-    const map: { row: number; left: Slot[]; right: Slot[]; isBack: boolean }[] = [];
-    
-    let currentDbRow = 1;
-
-    for (let r = 1; r <= mainRows; r++) {
-      let currentLeftCols = r === 1 ? firstRowLeft : (r === 2 ? secondRowLeft : leftCols);
-      let currentRightCols = r === 1 ? firstRowRight : (r === 2 ? secondRowRight : rightCols);
-
-      const isFirst = r === 1;
-      const showInlineDriverLeft = isFirst && driverInline && isDriverLeft;
-      const showInlineDriverRight = isFirst && driverInline && !isDriverLeft;
-
-      // If it's the first row AND the driver is inline, we remove 1 seat slot visually
-      if (r === 1 && driverInline) {
-        if (isDriverLeft) {
-          currentLeftCols = Math.max(0, currentLeftCols - 1);
-        } else {
-          currentRightCols = Math.max(0, currentRightCols - 1);
-        }
-      }
-
-      const leftSlots: Slot[] = [];
-      const rightSlots: Slot[] = [];
-
-      // Find the left seats in DB (start at column 1)
-      for (let c = 1; c <= currentLeftCols; c++) {
-        const seat = seatMap.get(`${currentDbRow}-${c}`);
-        leftSlots.push(seat ?? "GAP");
-      }
-
-      // Find the right seats in DB
-      for (let c = 1; c <= currentRightCols; c++) {
-        let seat = seatMap.get(`${currentDbRow}-${currentLeftCols + c}`);
-        // If driver is inline right, the DB might have skipped column 1
-        if (!seat && r === 1 && driverInline && !isDriverLeft) {
-           seat = seatMap.get(`${currentDbRow}-${c + 1}`);
-        }
-        rightSlots.push(seat ?? "GAP");
-      }
-
-      map.push({ 
-        row: r, 
-        left: leftSlots, 
-        right: rightSlots, 
-        isBack: false 
-      });
-      currentDbRow++;
-    }
-
-    // Back Bench
-    if (backSeats > 0) {
-      const backRowSlots: Slot[] = [];
-      for (let c = 1; c <= backSeats; c++) {
-        const seat = seatMap.get(`${currentDbRow}-${c}`);
-        backRowSlots.push(seat ?? "GAP");
-      }
-      map.push({ row: currentDbRow, left: backRowSlots, right: [], isBack: true });
-    }
-
-    return map;
-  }, [seatMap, leftCols, rightCols, firstRowLeft, firstRowRight, secondRowLeft, secondRowRight, mainRows, backSeats, driverInline, isDriverLeft]);
+  // Chosen seats that are not (yet) taken by someone else.
+  const liveSelectedCount = selectedSeatIds.filter((id) => !bookedSeatIds.includes(id)).length;
 
   const handleSeatClick = (seatId: string) => {
-    if (bookedSeatIds.includes(seatId)) return;
+    // A seat that has since been taken can still be un-selected.
     if (selectedSeatIds.includes(seatId)) {
       onToggleSeat(seatId);
-    } else if (selectedSeatIds.length < maxSeats) {
+      return;
+    }
+    if (bookedSeatIds.includes(seatId)) return;
+    if (liveSelectedCount < maxSeats) {
       onToggleSeat(seatId);
     }
   };
@@ -145,8 +76,8 @@ export function PassengerSeatMap({
     (availableH - totalRows * gapY) / (totalRows + (driverInline ? 0 : 1))
   );
 
-  const maxCols = Math.max(leftCols + rightCols, backSeats, 1);
-  const aisleW = 14;
+  const maxCols = layoutMetrics(layoutConfig).maxCols;
+  const aisleW = aisle === "NONE" ? 0 : 14;
   const gapX = 4;
   const availableW = Math.min(width - 60, 360);
   const seatByWidth = Math.floor(
@@ -159,12 +90,15 @@ export function PassengerSeatMap({
   const SeatButton = ({ seat }: { seat: DbSeat }) => {
     const isBooked = bookedSeatIds.includes(seat.id);
     const isSelected = selectedSeatIds.includes(seat.id);
-    const isDisabled = isBooked || (!isSelected && selectedSeatIds.length >= maxSeats);
+    const isDisabled = !isSelected && (isBooked || liveSelectedCount >= maxSeats);
 
-    const palette = isSelected
-      ? { cushion: "#ea580c", back: "#c2410c", edge: "#fdba74", text: "#ffffff" }
-      : isBooked
+    // Taken always wins over selected, so a lost seat shows red.
+    const palette = isBooked
       ? { cushion: "#3b1414", back: "#2a0f0f", edge: "#7f1d1d", text: "#ef4444" }
+      : isSelected
+      ? { cushion: "#ea580c", back: "#c2410c", edge: "#fdba74", text: "#ffffff" }
+      : seat.seat_type === "JUMP"
+      ? { cushion: "#134e4a", back: "#0f3d3a", edge: "#2dd4bf", text: "#ccfbf1" }
       : { cushion: "#52525b", back: "#3f3f46", edge: "#71717a", text: "#e4e4e7" };
 
     const backH = Math.max(5, Math.round(seatSize * 0.26));
@@ -182,9 +116,9 @@ export function PassengerSeatMap({
           height: seatSize,
           opacity: isBooked ? 0.75 : isDisabled ? 0.35 : 1,
           cursor: isBooked ? "not-allowed" : isDisabled ? "default" : "pointer",
-          filter: isSelected ? "drop-shadow(0 0 8px rgba(249,115,22,0.55))" : undefined,
+          filter: isSelected && !isBooked ? "drop-shadow(0 0 8px rgba(249,115,22,0.55))" : undefined,
         }}
-        title={isBooked ? `Seat ${seat.seat_number} (Booked)` : `Seat ${seat.seat_number}`}
+        title={`${seat.seat_type === "JUMP" ? "Jump seat" : "Seat"} ${seat.seat_number}${isBooked ? " (Booked)" : ""}`}
       >
         <div
           className="absolute"
@@ -275,10 +209,9 @@ export function PassengerSeatMap({
                   className="flex items-center justify-center w-full mt-2 pt-2 border-t-2 border-dashed border-neutral-800"
                   style={{ gap: gapX }}
                 >
-                  {rowObj.left.map((slot, i) => {
-                    if (slot === "GAP") return <div key={`gap-${i}`} style={{ width: seatSize, height: seatSize }} />;
-                    return <SeatButton key={slot.id} seat={slot} />;
-                  })}
+                  {rowObj.left.map((seat) => (
+                    <SeatButton key={seat.id} seat={seat} />
+                  ))}
                 </div>
               );
             }
@@ -286,6 +219,18 @@ export function PassengerSeatMap({
             const isFirstRow = rowObj.row === 1;
             const showDriverLeft = isFirstRow && driverInline && isDriverLeft;
             const showDriverRight = isFirstRow && driverInline && !isDriverLeft;
+            const cell = (seat: DbSeat) => <SeatButton key={seat.id} seat={seat} />;
+
+            // No aisle: one continuous, centred row
+            if (aisle === "NONE") {
+              return (
+                <div key={rowObj.row} className="flex w-full items-center justify-center px-1" style={{ gap: gapX }}>
+                  {showDriverLeft && <DriverWheel />}
+                  {[...rowObj.left, ...rowObj.right].map(cell)}
+                  {showDriverRight && <DriverWheel />}
+                </div>
+              );
+            }
 
             return (
               <div
@@ -295,17 +240,17 @@ export function PassengerSeatMap({
               >
                 <div className="flex items-center" style={{ gap: gapX }}>
                   {showDriverLeft && <DriverWheel />}
-                  {rowObj.left.map((slot, i) => {
-                    if (slot === "GAP") return <div key={`gap-${i}`} style={{ width: seatSize, height: seatSize }} />;
-                    return <SeatButton key={slot.id} seat={slot} />;
-                  })}
+                  {rowObj.left.map(cell)}
                 </div>
 
+                {rowObj.jump.length > 0 && (
+                  <div className="flex items-center" style={{ gap: gapX }}>
+                    {rowObj.jump.map(cell)}
+                  </div>
+                )}
+
                 <div className="flex items-center" style={{ gap: gapX }}>
-                  {rowObj.right.map((slot, i) => {
-                    if (slot === "GAP") return <div key={`gap-${i}`} style={{ width: seatSize, height: seatSize }} />;
-                    return <SeatButton key={slot.id} seat={slot} />;
-                  })}
+                  {rowObj.right.map(cell)}
                   {showDriverRight && <DriverWheel />}
                 </div>
               </div>
@@ -327,6 +272,12 @@ export function PassengerSeatMap({
           <div className="h-3 w-3 rounded-sm bg-red-950 border border-red-900" />
           <span>Booked</span>
         </div>
+        {hasJump && (
+          <div className="flex items-center gap-1.5">
+            <div className="h-3 w-3 rounded-sm bg-teal-900 border border-teal-400" />
+            <span>Jump seat</span>
+          </div>
+        )}
       </div>
     </div>
   );

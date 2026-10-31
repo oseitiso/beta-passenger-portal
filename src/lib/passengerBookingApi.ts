@@ -225,7 +225,7 @@ export async function recoverActiveBooking(
     try {
       const res = await request<{ success: boolean; bookings?: any[] }>(
         "/booking/recover",
-        { method: "POST", body: JSON.stringify({ passenger_phone: phone }) },
+        { method: "POST", body: JSON.stringify({ passenger_phone: phone, anonymous_id: getOrCreateAnonymousId() }) },
         15000
       );
       if (!res.success || !Array.isArray(res.bookings)) return null;
