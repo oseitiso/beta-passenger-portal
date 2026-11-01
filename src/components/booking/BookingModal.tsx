@@ -457,6 +457,7 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
               <div className="mb-4 rounded-lg border border-amber-900/40 bg-amber-950/30 p-3 text-xs text-amber-200">
                 You pay cash to the driver when you board. The driver will confirm your request and give you a 6-digit PIN.
               </div>
+              <p className="mb-2 text-center text-[11px] leading-snug text-neutral-500">By requesting a seat you agree to our <a href="/privacy" target="_blank" rel="noopener noreferrer" className="underline hover:text-neutral-300">Privacy Notice</a>.</p>
               <button onClick={submit} disabled={!canSubmit} className="w-full rounded-lg bg-orange-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-40">
                 Request seat{seats > 1 ? "s" : ""}
               </button>

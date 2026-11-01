@@ -14,6 +14,7 @@ import {
   MapPinOff,
   CheckCircle2,
   AlertCircle,
+  WifiOff,
 } from "lucide-react";
 import type { PublicBus } from "@/lib/passengerApi";
 import type { BookingDetail } from "@/lib/passengerBookingApi";
@@ -26,6 +27,10 @@ interface BusListProps {
   onSelectBus: (bus: PublicBus) => void;
   onCancelBooking: (handoffId: string) => Promise<void>;
   loading: boolean;
+  /** The first load of the bus list failed, so "no buses" would be untrue. */
+  loadFailed?: boolean;
+  /** A later refresh failed; the buses shown are the last known ones. */
+  stale?: boolean;
 }
 
 function timeSince(iso: string | null | undefined): string {
@@ -108,6 +113,8 @@ export function BusList({
   onSelectBus,
   onCancelBooking,
   loading,
+  loadFailed = false,
+  stale = false,
 }: BusListProps) {
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
@@ -147,7 +154,7 @@ export function BusList({
     );
   }
 
-  const showBusEmptyState = buses.length === 0;
+  const showBusEmptyState = buses.length === 0 && !loadFailed;
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -166,15 +173,30 @@ export function BusList({
           <EndedBanner booking={recentlyEndedBooking} />
         )}
 
-        <div className="flex-shrink-0 border-b border-neutral-800 px-4 py-2 text-xs font-medium text-neutral-500">
-          {buses.length} {buses.length === 1 ? "bus" : "buses"} active
-        </div>
+        {!loadFailed && (
+          <div className="flex-shrink-0 border-b border-neutral-800 px-4 py-2 text-xs font-medium text-neutral-500">
+            {buses.length} {buses.length === 1 ? "bus" : "buses"} active
+            {stale && (
+              <span className="ml-2 text-amber-400">· last known positions</span>
+            )}
+          </div>
+        )}
 
-        {showBusEmptyState ? (
+        {loadFailed ? (
+          <div className="flex flex-col items-center justify-center px-6 py-12 text-center">
+            <WifiOff className="mb-2 h-8 w-8 text-amber-500/80" />
+            <p className="text-sm font-medium text-neutral-300">
+              Couldn&apos;t load buses
+            </p>
+            <p className="mt-1 text-xs text-neutral-500">
+              Check your connection. We keep trying and will show buses as soon as it works.
+            </p>
+          </div>
+        ) : showBusEmptyState ? (
           <div className="flex flex-col items-center justify-center px-6 py-12 text-center">
             <Bus className="mb-2 h-8 w-8 text-neutral-600" />
             <p className="text-sm font-medium text-neutral-400">
-              No other buses on the road
+              {stale ? "No buses were on the road at the last update" : "No other buses on the road"}
             </p>
             {(activeBooking || recentlyEndedBooking) && (
               <p className="mt-1 text-xs text-neutral-600">

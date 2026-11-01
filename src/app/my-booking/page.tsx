@@ -116,32 +116,40 @@ function FindBookingForm({ onFound }: { onFound: () => void }) {
         Enter the booking reference and the phone number you booked with to bring your booking to this device.
       </div>
 
-      <label className="mt-3 block text-[11px] font-medium uppercase tracking-wide text-neutral-500">
-        Booking reference
-      </label>
-      <input
-        value={reference}
-        onChange={(e) => setReference(e.target.value)}
-        autoCapitalize="characters"
-        autoComplete="off"
-        className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 font-mono text-sm text-neutral-100 focus:border-orange-500 focus:outline-none"
-      />
-
-      <label className="mt-3 block text-[11px] font-medium uppercase tracking-wide text-neutral-500">
-        Phone number
-      </label>
-      <div className="mt-1 flex items-stretch gap-2">
-        <div className="flex items-center rounded-lg border border-neutral-700 bg-neutral-800 px-3 text-sm text-neutral-300">
-          +267
+      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div>
+          <label className="block text-[11px] font-medium uppercase tracking-wide text-neutral-500">
+            Booking reference
+          </label>
+          <input
+            value={reference}
+            onChange={(e) => setReference(e.target.value)}
+            autoCapitalize="characters"
+            autoComplete="off"
+            placeholder="e.g. BTA-ABC123"
+            className="mt-1 h-10 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 font-mono text-sm text-neutral-100 placeholder:text-neutral-600 focus:border-orange-500 focus:outline-none"
+          />
         </div>
-        <input
-          value={phoneDigits}
-          onChange={(e) => setPhoneDigits(e.target.value.replace(/\D/g, "").slice(0, 8))}
-          inputMode="numeric"
-          maxLength={8}
-          autoComplete="tel-national"
-          className="min-w-0 flex-1 rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 focus:border-orange-500 focus:outline-none"
-        />
+
+        <div>
+          <label className="block text-[11px] font-medium uppercase tracking-wide text-neutral-500">
+            Phone number
+          </label>
+          <div className="mt-1 flex h-10 items-stretch gap-2">
+            <div className="flex items-center rounded-lg border border-neutral-700 bg-neutral-800 px-3 text-sm text-neutral-300">
+              +267
+            </div>
+            <input
+              value={phoneDigits}
+              onChange={(e) => setPhoneDigits(e.target.value.replace(/\D/g, "").slice(0, 8))}
+              inputMode="numeric"
+              maxLength={8}
+              autoComplete="tel-national"
+              placeholder="71234567"
+              className="min-w-0 flex-1 rounded-lg border border-neutral-700 bg-neutral-950 px-3 text-sm text-neutral-100 placeholder:text-neutral-600 focus:border-orange-500 focus:outline-none"
+            />
+          </div>
+        </div>
       </div>
 
       {message && (
@@ -481,6 +489,9 @@ export default function MyBookingPage() {
             <div className="mt-1 text-xs text-neutral-600">Trips you finish or cancel will appear here.</div>
           </div>
         )}
+              <p className="mt-8 text-center text-xs text-neutral-500">
+          <Link href="/privacy" className="underline hover:text-neutral-300">Privacy Notice</Link>
+        </p>
       </main>
     </div>
   );

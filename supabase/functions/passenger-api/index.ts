@@ -1,4 +1,5 @@
-// B-ETA Passenger API Edge Function — v2.7
+// B-ETA Passenger API Edge Function — v2.7.1
+// v2.7.1 — Server errors (HTTP 500), and the quiet failures that hide buses from a search or blank the boardable stops, are reported to Sentry when the secret SENTRY_DSN is set.
 // Deploy to: hzmpncdygkeqvoszunfm
 // Public-facing API for the passenger portal. Returns ONLY public bus data.
 //
@@ -19,6 +20,69 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "GET, OPTIONS",
 };
+
+// ============================================================
+// Error reporting to Sentry (no SDK; one small HTTPS call per server error).
+// Set the secret SENTRY_DSN to switch it on. Phone numbers and e-mail
+// addresses are removed from the text before it leaves the function.
+// ============================================================
+const SENTRY_DSN = Deno.env.get("SENTRY_DSN") ?? "";
+const SENTRY_ENV = Deno.env.get("SENTRY_ENVIRONMENT") ?? "production";
+const FN_NAME = "passenger-api";
+const FN_VERSION = "2.7.1";
+let sentryWindowStart = 0;
+let sentrySent = 0;
+
+function scrubForSentry(s: string): string {
+  return s
+    .replace(/\+\d[\d\s\-()]{7,}\d/g, "[redacted-phone]")
+    .replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, "[redacted-email]");
+}
+
+function reportToSentry(
+  message: string,
+  error?: unknown,
+  tags: Record<string, string> = {}
+): void {
+  if (!SENTRY_DSN) return;
+  try {
+    // at most 20 reports per minute per running copy, so an outage cannot flood Sentry
+    const now = Date.now();
+    if (now - sentryWindowStart > 60_000) {
+      sentryWindowStart = now;
+      sentrySent = 0;
+    }
+    if (sentrySent >= 20) return;
+    sentrySent++;
+
+    const dsn = new URL(SENTRY_DSN);
+    const project = dsn.pathname.replace(/^\//, "");
+    const endpoint =
+      `${dsn.protocol}//${dsn.host}/api/${project}/store/?sentry_key=${dsn.username}&sentry_version=7`;
+    const e = error as any;
+    const event = {
+      event_id: crypto.randomUUID().replace(/-/g, ""),
+      timestamp: new Date().toISOString(),
+      platform: "javascript",
+      level: "error",
+      logger: FN_NAME,
+      server_name: FN_NAME,
+      environment: SENTRY_ENV,
+      release: `${FN_NAME}@${FN_VERSION}`,
+      message: scrubForSentry(String(message ?? "Server error")).slice(0, 1000),
+      tags: { function: FN_NAME, ...tags },
+      extra: e?.stack ? { stack: scrubForSentry(String(e.stack)).slice(0, 4000) } : undefined,
+    };
+    const p = fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(event),
+    }).catch(() => {});
+    (globalThis as any).EdgeRuntime?.waitUntil?.(p);
+  } catch {
+    // reporting must never break a request
+  }
+}
 
 const SUPABASE_DB_URL = Deno.env.get("SUPABASE_DB_URL") ?? "";
 
@@ -115,6 +179,7 @@ function ok(body: unknown, status = 200) {
 }
 
 function err(message: string, status = 400) {
+  if (status >= 500) reportToSentry(message);
   return new Response(JSON.stringify({ error: message }), {
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -188,7 +253,8 @@ async function loadStopsForRouteWithBoardability(
       `;
       const frac = busLocRows[0]?.frac;
       if (frac != null) busDistanceKm = frac * totalKm;
-    } catch {
+    } catch (e: any) {
+      reportToSentry(e?.message ?? "bus position on route failed", e, { step: "bus_distance" });
       busDistanceKm = null;
     }
   }
@@ -452,6 +518,7 @@ async function fetchActiveTrips(opts: {
         if (!parsed || parsed.searchable !== true) continue;
       } catch (e) {
         console.error("[fetchActiveTrips] segment search error:", e);
+        reportToSentry(e?.message ?? "segment search failed", e, { step: "is_segment_searchable" });
         continue;
       }
     } else if (hasFromFilter && t.route_id) {
@@ -473,6 +540,7 @@ async function fetchActiveTrips(opts: {
         if (!parsed || parsed.searchable !== true) continue;
       } catch (e) {
         console.error("[fetchActiveTrips] from-only search error:", e);
+        reportToSentry(e?.message ?? "from-only search failed", e, { step: "is_stop_on_route_searchable" });
         continue;
       }
     }
@@ -568,6 +636,7 @@ async function fetchActiveTrips(opts: {
         }
       } catch (e) {
         console.error("[fetchActiveTrips] segment seats error:", e);
+        reportToSentry(e?.message ?? "segment seats failed", e, { step: "segment_available_seats" });
       }
     }
 
@@ -596,7 +665,7 @@ serve(async (req: Request) => {
     if (pathname === "/health" || pathname === "/") {
       return ok({
         status: "B-ETA Passenger API active",
-        version: "2.7.0",
+        version: "2.7.1",
       });
     }
 
@@ -1090,6 +1159,7 @@ serve(async (req: Request) => {
 
     return err("Not found", 404);
   } catch (e: any) {
+    reportToSentry(e?.message ?? "Internal Server Error", e, { path: pathname });
     return new Response(
       JSON.stringify({
         error: e?.message ?? "Internal Server Error",

@@ -1,4 +1,5 @@
 // B-ETA Passenger Booking API v1.5.0
+// v1.5.0 (also): server errors (HTTP 500) are reported to Sentry when the secret SENTRY_DSN is set.
 // v1.5.0: POST /booking/find looks a booking up from a new device. It needs the booking reference AND the full phone number used to book; a wrong pair looks exactly like an unknown reference and counts toward the rate limit.
 // v1.4.0: SECURITY. Ticket lookup hides driver id and masks the phone; /booking/recover needs the device anonymous_id and returns only live bookings; wrong-reference guessing is rate limited (20 misses per 10 minutes per visitor, then 15 minutes blocked).
 // v1.3.1: GET /booking/status also returns operator_name, vehicle_registration, vehicle_description.
@@ -32,6 +33,70 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
 };
 
+
+// ============================================================
+// Error reporting to Sentry (no SDK; one small HTTPS call per server error).
+// Set the secret SENTRY_DSN to switch it on. Phone numbers and e-mail
+// addresses are removed from the text before it leaves the function.
+// ============================================================
+const SENTRY_DSN = Deno.env.get("SENTRY_DSN") ?? "";
+const SENTRY_ENV = Deno.env.get("SENTRY_ENVIRONMENT") ?? "production";
+const FN_NAME = "passenger-booking-api";
+const FN_VERSION = "1.5.0";
+let sentryWindowStart = 0;
+let sentrySent = 0;
+
+function scrubForSentry(s: string): string {
+  return s
+    .replace(/\+\d[\d\s\-()]{7,}\d/g, "[redacted-phone]")
+    .replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, "[redacted-email]");
+}
+
+function reportToSentry(
+  message: string,
+  error?: unknown,
+  tags: Record<string, string> = {}
+): void {
+  if (!SENTRY_DSN) return;
+  try {
+    // at most 20 reports per minute per running copy, so an outage cannot flood Sentry
+    const now = Date.now();
+    if (now - sentryWindowStart > 60_000) {
+      sentryWindowStart = now;
+      sentrySent = 0;
+    }
+    if (sentrySent >= 20) return;
+    sentrySent++;
+
+    const dsn = new URL(SENTRY_DSN);
+    const project = dsn.pathname.replace(/^\//, "");
+    const endpoint =
+      `${dsn.protocol}//${dsn.host}/api/${project}/store/?sentry_key=${dsn.username}&sentry_version=7`;
+    const e = error as any;
+    const event = {
+      event_id: crypto.randomUUID().replace(/-/g, ""),
+      timestamp: new Date().toISOString(),
+      platform: "javascript",
+      level: "error",
+      logger: FN_NAME,
+      server_name: FN_NAME,
+      environment: SENTRY_ENV,
+      release: `${FN_NAME}@${FN_VERSION}`,
+      message: scrubForSentry(String(message ?? "Server error")).slice(0, 1000),
+      tags: { function: FN_NAME, ...tags },
+      extra: e?.stack ? { stack: scrubForSentry(String(e.stack)).slice(0, 4000) } : undefined,
+    };
+    const p = fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(event),
+    }).catch(() => {});
+    (globalThis as any).EdgeRuntime?.waitUntil?.(p);
+  } catch {
+    // reporting must never break a request
+  }
+}
+
 function ok(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -39,7 +104,8 @@ function ok(body: unknown, status = 200) {
   });
 }
 
-function err(message: string, status = 400, extra?: unknown) {
+function err(message: string, status = 400, extra?: unknown, report = true) {
+  if (status >= 500 && report) reportToSentry(message);
   return new Response(
     JSON.stringify({ success: false, error: message, ...(extra as object) }),
     {
@@ -407,6 +473,7 @@ serve(async (req: Request) => {
 
     return err("Not found", 404);
   } catch (e: any) {
-    return err(e?.message ?? "Internal error", 500);
+    reportToSentry(e?.message ?? "Internal error", e, { path: pathname });
+    return err(e?.message ?? "Internal error", 500, undefined, false);
   }
 });

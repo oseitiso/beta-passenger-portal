@@ -11,6 +11,7 @@ import {
   X,
   Loader2,
   BellRing,
+  WifiOff,
 } from "lucide-react";
 import {
   getActiveBuses,
@@ -395,7 +396,8 @@ export default function MapPage() {
   const [destination, setDestination] = useState("");
   const [debouncedOrigin, setDebouncedOrigin] = useState("");
   const [debouncedDestination, setDebouncedDestination] = useState("");
-  const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [busesLoadedOnce, setBusesLoadedOnce] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [bookingBus, setBookingBus] = useState<PublicBus | null>(null);
   const [filterMode, setFilterMode] = useState<FilterMode>("dim");
@@ -472,7 +474,6 @@ export default function MapPage() {
 
   const fetchBuses = useCallback(async () => {
     setLoading(true);
-    setError(null);
     try {
       const data = await getActiveBuses({
         from: debouncedOrigin || undefined,
@@ -480,8 +481,21 @@ export default function MapPage() {
       });
       setBuses(data);
       setLastUpdated(new Date());
+      setBusesLoadedOnce(true);
+      setError(null);
     } catch (e: any) {
-      setError(e?.message ?? "Failed to load buses");
+      // Keep the last known buses on screen and say what happened in plain words.
+      const offline =
+        typeof navigator !== "undefined" && navigator.onLine === false;
+      const networkProblem =
+        offline ||
+        e instanceof TypeError ||
+        /failed to fetch|network|load failed/i.test(String(e?.message ?? ""));
+      setError(
+        networkProblem
+          ? "No connection. Retrying automatically."
+          : "Buses could not be loaded right now. Retrying automatically."
+      );
     } finally {
       setLoading(false);
     }
@@ -490,6 +504,18 @@ export default function MapPage() {
   useEffect(() => {
     fetchRef.current = fetchBuses;
   }, [fetchBuses]);
+
+  // Try again the moment the phone gets a signal back, and keep the
+  // "updated … ago" label moving.
+  useEffect(() => {
+    const onOnline = () => fetchRef.current();
+    window.addEventListener("online", onOnline);
+    const t = setInterval(() => setTick((v) => v + 1), 5000);
+    return () => {
+      window.removeEventListener("online", onOnline);
+      clearInterval(t);
+    };
+  }, []);
 
   const refreshActiveBooking = useCallback(async () => {
     const stored = getActiveBooking();
@@ -787,6 +813,8 @@ export default function MapPage() {
               onSelectBus={handleSelectBus}
               onCancelBooking={handleCancelActiveBooking}
               loading={loading}
+              loadFailed={Boolean(error) && !busesLoadedOnce}
+              stale={Boolean(error) && busesLoadedOnce}
             />
           </aside>
         )}
@@ -859,13 +887,28 @@ export default function MapPage() {
 
           {secondsAgo !== null && (
             <div className="pointer-events-none absolute bottom-4 left-4 z-[1000] rounded-full bg-neutral-900/90 px-3 py-1.5 text-xs text-neutral-400 backdrop-blur">
-              Updated {secondsAgo}s ago
+              {error ? "Last updated" : "Updated"} {secondsAgo}s ago
             </div>
           )}
 
           {error && (
-            <div className="pointer-events-none absolute bottom-4 right-4 z-[1000] rounded-lg border border-red-900/50 bg-red-950/80 px-3 py-2 text-xs text-red-300 backdrop-blur">
-              {error}
+            <div className="absolute bottom-4 right-4 z-[1000] flex max-w-[calc(100%-2rem)] items-center gap-3 rounded-lg border border-amber-900/50 bg-amber-950/85 px-3 py-2 text-xs text-amber-200 backdrop-blur">
+              <WifiOff className="h-4 w-4 flex-shrink-0 text-amber-400" />
+              <div className="min-w-0">
+                <div className="font-medium">{error}</div>
+                {busesLoadedOnce && (
+                  <div className="text-[11px] text-amber-300/70">
+                    Showing the last known bus positions.
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={fetchBuses}
+                disabled={loading}
+                className="pointer-events-auto flex-shrink-0 rounded-md border border-amber-700/60 px-2 py-1 text-[11px] font-medium text-amber-100 hover:bg-amber-900/50 disabled:opacity-50"
+              >
+                Try again
+              </button>
             </div>
           )}
         </main>
