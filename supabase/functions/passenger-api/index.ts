@@ -1,4 +1,5 @@
-// B-ETA Passenger API Edge Function — v2.7.1
+// B-ETA Passenger API Edge Function — v2.8.0
+// v2.8.0 — Arrival times use the planned stop times of the route (trip_eta_plan): each stop carries its own eta_minutes, and a bus on a planned break reports live.break with the minutes left.
 // v2.7.1 — Server errors (HTTP 500), and the quiet failures that hide buses from a search or blank the boardable stops, are reported to Sentry when the secret SENTRY_DSN is set.
 // Deploy to: hzmpncdygkeqvoszunfm
 // Public-facing API for the passenger portal. Returns ONLY public bus data.
@@ -29,7 +30,7 @@ const corsHeaders = {
 const SENTRY_DSN = Deno.env.get("SENTRY_DSN") ?? "";
 const SENTRY_ENV = Deno.env.get("SENTRY_ENVIRONMENT") ?? "production";
 const FN_NAME = "passenger-api";
-const FN_VERSION = "2.7.1";
+const FN_VERSION = "2.8.0";
 let sentryWindowStart = 0;
 let sentrySent = 0;
 
@@ -110,12 +111,20 @@ interface StopShape {
   fare_zone: number | null;
   fare_zone_distance_km: number | null;
   boardable: boolean;
+  eta_minutes?: number | null;
   unboardable_reason:
     | "bus_passed"
     | "too_close"
     | "destination"
     | "off_route"
     | null;
+}
+
+function attachStopEtas(stops: StopShape[], plan: any | null): StopShape[] {
+  if (!plan || !Array.isArray(plan.stops)) return stops;
+  const m = new Map<string, number | null>();
+  for (const p of plan.stops) m.set(p.stop_id, p.passed ? null : p.eta_minutes ?? null);
+  return stops.map((st) => ({ ...st, eta_minutes: m.get(st.stop_id) ?? null }));
 }
 
 interface PublicTrip {
@@ -136,6 +145,12 @@ interface PublicTrip {
     last_position_at: string | null;
     distance_remaining_km: number | null;
     eta_minutes: number | null;
+    break: {
+      stop_id: string;
+      stop_name: string;
+      planned_min: number;
+      remaining_min: number;
+    } | null;
   };
   vehicle: {
     registration_plate: string;
@@ -434,6 +449,7 @@ async function fetchActiveTrips(opts: {
       last_position_at: string | null;
       distance_remaining_km: number | null;
       eta_minutes: number | null;
+      eta_plan: any | null;
     }[]
   >`
     select
@@ -466,24 +482,14 @@ async function fetchActiveTrips(opts: {
           public.remaining_distance_km(t.route_id, vcs.latitude, vcs.longitude)
         else null
       end as distance_remaining_km,
-      case
-        when t.route_id is not null
-             and vcs.latitude is not null
-             and vcs.longitude is not null
-             and vcs.speed_kph is not null
-             and vcs.speed_kph > 5 then
-          round(
-            (public.remaining_distance_km(t.route_id, vcs.latitude, vcs.longitude)
-             / vcs.speed_kph * 60)::numeric,
-            0
-          )
-        else null
-      end as eta_minutes
+      (ep.plan->>'eta_minutes')::numeric as eta_minutes,
+      ep.plan as eta_plan
     from trips t
     left join routes r on r.id = t.route_id
     left join vehicles v on v.id = t.vehicle_id
     left join operators o on o.id = v.operator_id
     left join vehicle_current_state vcs on vcs.vehicle_id = t.vehicle_id
+    left join lateral (select case when t.route_id is not null and vcs.latitude is not null and vcs.longitude is not null then public.trip_eta_plan(t.id, t.route_id, vcs.latitude, vcs.longitude, vcs.speed_kph) else null end as plan) ep on true
     where t.status = 'IN_PROGRESS'
       AND vcs.latitude is not null
       AND vcs.longitude is not null
@@ -569,7 +575,7 @@ async function fetchActiveTrips(opts: {
             name: t.route_name ?? "Unnamed route",
             origin: t.route_origin,
             destination: t.route_destination,
-            stops,
+            stops: attachStopEtas(stops, t.eta_plan),
           }
         : null,
       live: {
@@ -583,6 +589,7 @@ async function fetchActiveTrips(opts: {
             ? Number(t.distance_remaining_km)
             : null,
         eta_minutes: t.eta_minutes != null ? Number(t.eta_minutes) : null,
+        break: t.eta_plan?.break ?? null,
       },
       vehicle: {
         registration_plate: t.vehicle_plate ?? "—",
@@ -742,6 +749,7 @@ serve(async (req: Request) => {
           last_position_at: string | null;
           distance_remaining_km: number | null;
           eta_minutes: number | null;
+          eta_plan: any | null;
         }[]
       >`
         select
@@ -774,24 +782,14 @@ serve(async (req: Request) => {
               public.remaining_distance_km(t.route_id, vcs.latitude, vcs.longitude)
             else null
           end as distance_remaining_km,
-          case
-            when t.route_id is not null
-                 and vcs.latitude is not null
-                 and vcs.longitude is not null
-                 and vcs.speed_kph is not null
-                 and vcs.speed_kph > 5 then
-              round(
-                (public.remaining_distance_km(t.route_id, vcs.latitude, vcs.longitude)
-                 / vcs.speed_kph * 60)::numeric,
-                0
-              )
-            else null
-          end as eta_minutes
+          (ep.plan->>'eta_minutes')::numeric as eta_minutes,
+      ep.plan as eta_plan
         from trips t
         left join routes r on r.id = t.route_id
         left join vehicles v on v.id = t.vehicle_id
     left join operators o on o.id = v.operator_id
         left join vehicle_current_state vcs on vcs.vehicle_id = t.vehicle_id
+    left join lateral (select case when t.route_id is not null and vcs.latitude is not null and vcs.longitude is not null then public.trip_eta_plan(t.id, t.route_id, vcs.latitude, vcs.longitude, vcs.speed_kph) else null end as plan) ep on true
         where t.id = ${tripId}::uuid
           and t.status = 'IN_PROGRESS'
         limit 1
@@ -820,7 +818,7 @@ serve(async (req: Request) => {
               name: t.route_name ?? "Unnamed route",
               origin: t.route_origin,
               destination: t.route_destination,
-              stops,
+              stops: attachStopEtas(stops, t.eta_plan),
             }
           : null,
         live: {
@@ -834,6 +832,7 @@ serve(async (req: Request) => {
               ? Number(t.distance_remaining_km)
               : null,
           eta_minutes: t.eta_minutes != null ? Number(t.eta_minutes) : null,
+          break: t.eta_plan?.break ?? null,
         },
         vehicle: {
           registration_plate: t.vehicle_plate ?? "—",

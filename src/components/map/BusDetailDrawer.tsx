@@ -114,8 +114,17 @@ function computeTarget(
   const travelled = Math.max(0, routeLen - remainingKm);
   const raw = stop.distance_from_origin_km - travelled;
   const km = Math.max(0, raw);
+  // The server now sends a time for each stop that already counts the planned breaks.
+  // The distance scaling is only the fallback for an older server answer.
+  const planned = (stop as unknown as { eta_minutes?: number | null }).eta_minutes;
   const eta =
-    etaMin != null && remainingKm > 0 ? etaMin * (km / remainingKm) : km === 0 ? 0 : null;
+    planned != null
+      ? planned
+      : etaMin != null && remainingKm > 0
+      ? etaMin * (km / remainingKm)
+      : km === 0
+      ? 0
+      : null;
 
   return {
     mode,
@@ -237,6 +246,11 @@ export function BusDetailDrawer({
   const etaHuman = formatEtaHuman(target.eta);
   const etaClock = formatArrivalClock(target.eta);
   const stopLabel = target.stopName ?? "your stop";
+  const plannedBreak = (
+    bus.live as unknown as {
+      break?: { stop_name: string; planned_min: number; remaining_min: number } | null;
+    }
+  )?.break ?? null;
   const heroLabel = !personal
     ? "ARRIVES IN"
     : target.mode === "pickup"
@@ -303,6 +317,24 @@ export function BusDetailDrawer({
           <X className="h-4 w-4" />
         </button>
       </div>
+
+      {/* Planned break */}
+      {plannedBreak && (
+        <div className="flex-shrink-0 border-b border-neutral-800 bg-blue-600/10 px-4 py-3">
+          <div className="flex items-center gap-1.5 text-xs font-medium text-blue-300">
+            <Clock className="h-3 w-3" />
+            PLANNED STOP
+          </div>
+          <div className="mt-1 text-sm font-semibold text-neutral-100">
+            Bus is on a planned break at {plannedBreak.stop_name}
+          </div>
+          <div className="mt-0.5 text-xs text-neutral-400">
+            {plannedBreak.remaining_min > 0
+              ? `About ${plannedBreak.remaining_min} min left of ${plannedBreak.planned_min} min`
+              : "The break is about to end"}
+          </div>
+        </div>
+      )}
 
       {/* ETA hero block */}
       {(etaHuman || (personal && (target.atStop || target.passed))) && (
