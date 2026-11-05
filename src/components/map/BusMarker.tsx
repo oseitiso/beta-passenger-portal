@@ -22,67 +22,47 @@ const createBusIcon = (
   bookingState: BookingMarkerState = null,
   heading: number = 0
 ) => {
-  const opacity = dimmed ? "0.35" : "1";
-
   // Booking state wins over selection colour so the passenger can always
-  // find their own bus. Terminal states fall back to the normal colour.
-  let bg: string;
-  let border: string;
-  let pulseColour: string;
+  // find their own bus. The bus artwork keeps its own colours; the state is
+  // shown by a coloured glow around the bus and a pulse behind it.
+  let glow: string | null = null;
 
-  if (bookingState === "picked_up") {
-    bg = "#3b82f6";
-    border = "#fff";
-    pulseColour = "#60a5fa";
-  } else if (bookingState === "accepted") {
-    bg = "#22c55e";
-    border = "#fff";
-    pulseColour = "#4ade80";
-  } else if (dimmed) {
-    bg = "#525252";
-    border = "#404040";
-    pulseColour = "#525252";
-  } else if (selected) {
-    bg = "#f97316";
-    border = "#fff";
-    pulseColour = "#f97316";
-  } else {
-    bg = "#ea580c";
-    border = "#f97316";
-    pulseColour = "#ea580c";
-  }
+  if (bookingState === "picked_up") glow = "#3b82f6";
+  else if (bookingState === "accepted") glow = "#22c55e";
+  else if (selected) glow = "#f97316";
 
-  const pulseHtml =
-    selected || bookingState
-      ? `
+  const opacity = dimmed ? "0.35" : "1";
+  const filter = dimmed
+    ? "grayscale(1) drop-shadow(0 1px 2px rgba(0,0,0,0.5))"
+    : glow
+    ? `drop-shadow(0 0 2px ${glow}) drop-shadow(0 0 4px ${glow}) drop-shadow(0 2px 3px rgba(0,0,0,0.5))`
+    : "drop-shadow(0 2px 3px rgba(0,0,0,0.55))";
+
+  const pulseHtml = glow && !dimmed
+    ? `
       <span style="
         position: absolute;
-        inset: -6px;
+        left: 50%; top: 50%;
+        width: 34px; height: 34px;
+        margin: -17px 0 0 -17px;
         border-radius: 50%;
-        background: ${pulseColour};
+        background: ${glow};
         opacity: 0.5;
         animation: busPulse 1.5s ease-out infinite;
         pointer-events: none;
       "></span>
     `
-      : "";
+    : "";
 
   return L.divIcon({
     className: "",
     html: `
-      <div style="
-        position: relative;
-        width: 36px; height: 36px;
-      ">
+      <div style="position: relative; width: 40px; height: 40px;">
         ${pulseHtml}
         <div style="
           position: absolute;
           inset: 0;
-          background: ${bg};
-          border: 2px solid ${border};
-          border-radius: 50%;
           display: flex; align-items: center; justify-content: center;
-          box-shadow: 0 2px 8px rgba(0,0,0,0.5);
           transform: ${selected ? "scale(1.15)" : "scale(1)"};
           transition: transform 0.2s, opacity 0.2s;
           opacity: ${opacity};
@@ -92,26 +72,25 @@ const createBusIcon = (
             transition: transform 0.4s ease-out;
             display: flex; align-items: center; justify-content: center;
           ">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M8 6v6"></path><path d="M15 6v6"></path>
-              <path d="M2 12h19.6"></path>
-              <path d="M18 18h3s.5-1.7.8-2.8c.1-.4.2-.8.2-1.2 0-.4-.1-.8-.2-1.2l-1.4-5C20.1 6.8 19.1 6 18 6H4a2 2 0 0 0-2 2v10h3"></path>
-              <circle cx="7" cy="18" r="2"></circle>
-              <circle cx="16" cy="18" r="2"></circle>
-            </svg>
+            <img
+              src="/bus-marker.svg"
+              alt=""
+              draggable="false"
+              style="height: 48px; width: auto; display: block; pointer-events: none; filter: ${filter};"
+            />
           </div>
         </div>
       </div>
       <style>
         @keyframes busPulse {
           0% { transform: scale(1); opacity: 0.5; }
-          100% { transform: scale(1.8); opacity: 0; }
+          100% { transform: scale(2); opacity: 0; }
         }
       </style>
     `,
-    iconSize: [36, 36],
-    iconAnchor: [18, 18],
-    popupAnchor: [0, -18],
+    iconSize: [40, 40],
+    iconAnchor: [20, 20],
+    popupAnchor: [0, -26],
   });
 };
 
