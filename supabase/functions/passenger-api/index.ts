@@ -111,6 +111,7 @@ interface StopShape {
   fare_zone: number | null;
   fare_zone_distance_km: number | null;
   boardable: boolean;
+  km_ahead?: number | null;
   eta_minutes?: number | null;
   unboardable_reason:
     | "bus_passed"
@@ -219,6 +220,7 @@ async function loadStopsForRouteWithBoardability(
       distance_from_origin_km: number | null;
       fare_zone: number | null;
       fare_zone_distance_km: string | number | null;
+      stop_frac: number | null;
     }[]
   >`
     select
@@ -231,8 +233,12 @@ async function loadStopsForRouteWithBoardability(
       rs.stop_order,
       rs.distance_from_origin_km,
       rs.fare_zone,
-      rs.fare_zone_distance_km
+      rs.fare_zone_distance_km,
+      case when rt.polyline_geom is not null and s.lat is not null and s.lng is not null
+        then ST_LineLocatePoint(rt.polyline_geom, ST_SetSRID(ST_MakePoint(s.lng::numeric, s.lat::numeric), 4326))
+        else null end as stop_frac
     from route_stops rs
+    join routes rt on rt.id = rs.route_id
     join stops s on s.id = rs.stop_id
     where rs.route_id = ${routeId}::uuid
     order by rs.stop_order asc
@@ -278,6 +284,9 @@ async function loadStopsForRouteWithBoardability(
 
   return rows.map((r, idx) => {
     const isLast = idx === rows.length - 1;
+    // Stop position on the same polyline scale as the bus; falls back to the stored distance.
+    const stopKm: number | null =
+      r.stop_frac != null && totalKm != null ? Number(r.stop_frac) * totalKm : r.distance_from_origin_km;
     let boardable = true;
     let unboardable_reason: StopShape["unboardable_reason"] = null;
 
@@ -288,11 +297,11 @@ async function loadStopsForRouteWithBoardability(
       boardable = false;
       unboardable_reason = "destination";
     } else if (busDistanceKm != null) {
-      if (busDistanceKm >= r.distance_from_origin_km) {
+      if (busDistanceKm >= (stopKm as number)) {
         boardable = false;
         unboardable_reason = "bus_passed";
       } else {
-        const kmAhead = r.distance_from_origin_km - busDistanceKm;
+        const kmAhead = (stopKm as number) - busDistanceKm;
         const eta = (kmAhead / effectiveSpeed) * 60;
         if (eta < 5) {
           boardable = false;
@@ -310,6 +319,10 @@ async function loadStopsForRouteWithBoardability(
       lng: r.lng,
       order: r.stop_order,
       distance_from_origin_km: r.distance_from_origin_km,
+      km_ahead:
+        busDistanceKm != null && stopKm != null
+          ? Math.round((Number(stopKm) - busDistanceKm) * 1000) / 1000
+          : null,
       fare_zone: r.fare_zone != null ? Number(r.fare_zone) : null,
       fare_zone_distance_km:
         r.fare_zone_distance_km != null ? Number(r.fare_zone_distance_km) : null,

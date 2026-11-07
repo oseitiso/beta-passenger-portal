@@ -39,6 +39,7 @@ import {
   clearActiveBooking,
   appendBookingHistory,
   type BookingDetail,
+  checkInAtStop,
 } from "@/lib/passengerBookingApi";
 import {
   logSearchSubmitted,
@@ -417,6 +418,12 @@ export default function MapPage() {
   const fetchRef = useRef<() => void>(() => {});
 
   const [arrivalAlert, setArrivalAlert] = useState<"approaching" | "arrived" | null>(null);
+  const [checkinBusy, setCheckinBusy] = useState(false);
+  const [checkinState, setCheckinState] = useState<{ ok: boolean; message: string } | null>(null);
+  const checkinConsented = useRef(false);
+  useEffect(() => {
+    if (!arrivalAlert) setCheckinState(null);
+  }, [arrivalAlert]);
   const lastAlertRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -755,6 +762,73 @@ export default function MapPage() {
     return zones;
   }, [bookedBus]);
 
+  const handleCheckIn = () => {
+    if (checkinBusy || checkinState?.ok || !activeBooking) return;
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
+      setCheckinState({ ok: false, message: "Location is not available on this device." });
+      return;
+    }
+    if (!checkinConsented.current) {
+      const agreed = window.confirm(
+        "Share your location once to show you are at the stop? It is kept for 90 days and used only if there is a dispute about this booking."
+      );
+      if (!agreed) return;
+      checkinConsented.current = true;
+    }
+    const reference = activeBooking.booking_reference;
+    setCheckinBusy(true);
+    setCheckinState(null);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        try {
+          const res = await checkInAtStop({
+            reference,
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
+            accuracy_m: pos.coords.accuracy,
+            device_time: new Date(pos.timestamp).toISOString(),
+          });
+          if (res.success && res.valid) {
+            setCheckinState({
+              ok: true,
+              message: "Location shared at " + new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+            });
+          } else if (res.success) {
+            setCheckinState({
+              ok: false,
+              message: "You seem to be about " + res.distance_to_stop_m + " m from the stop. Move closer and tap again.",
+            });
+          } else {
+            setCheckinState({ ok: false, message: res.error ?? "Could not share your location. Tap to try again." });
+          }
+        } catch {
+          setCheckinState({ ok: false, message: "No connection. Tap to try again." });
+        } finally {
+          setCheckinBusy(false);
+        }
+      },
+      (geoErr) => {
+        setCheckinBusy(false);
+        setCheckinState({
+          ok: false,
+          message:
+            geoErr.code === 1
+              ? "Location permission was denied. Allow it in your browser to use this."
+              : "Could not get your location. Tap to try again.",
+        });
+      },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
+    );
+  };
+
+  const toastText = checkinBusy
+    ? "Getting your location..."
+    : checkinState
+    ? checkinState.message
+    : arrivalAlert === "arrived"
+    ? "Bus is here! Wave it down. Tap: I'm here"
+    : "Bus approaching (1 km away). Tap: I'm here";
+
   const secondsAgo = lastUpdated
     ? Math.floor((Date.now() - lastUpdated.getTime()) / 1000)
     : null;
@@ -796,9 +870,9 @@ export default function MapPage() {
       </header>
 
       {arrivalAlert && (
-        <div className={`absolute left-1/2 top-20 z-[2000] flex -translate-x-1/2 items-center gap-2 rounded-full px-4 py-2 text-sm font-bold text-white shadow-lg animate-bounce ${arrivalAlert === "arrived" ? "bg-green-600" : "bg-orange-600"}`}>
+        <div role="button" tabIndex={0} onClick={handleCheckIn} onKeyDown={(e) => { if (e.key === "Enter") handleCheckIn(); }} className={`absolute left-1/2 top-20 z-[2000] flex -translate-x-1/2 cursor-pointer items-center gap-2 rounded-full px-4 py-2 text-sm font-bold text-white shadow-lg ${checkinState?.ok ? "bg-green-700" : arrivalAlert === "arrived" ? "bg-green-600" : "bg-orange-600"} ${checkinState || checkinBusy ? "" : "animate-pulse"}`}>
           <BellRing className="h-4 w-4" />
-          {arrivalAlert === "arrived" ? "Bus is here! Wave it down." : "Bus approaching (1 km away)"}
+          {toastText}
         </div>
       )}
 

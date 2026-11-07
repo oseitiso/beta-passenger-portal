@@ -278,6 +278,30 @@ export async function findBooking(
   });
 }
 
+/**
+ * "I'm here": shares one time-stamped location reading as evidence that the passenger
+ * was at the boarding stop. Only accepted while the bus is close and the booking is confirmed.
+ */
+export async function checkInAtStop(input: {
+  reference: string;
+  lat: number;
+  lng: number;
+  accuracy_m?: number | null;
+  device_time?: string | null;
+}): Promise<{
+  success: boolean;
+  valid?: boolean;
+  distance_to_stop_m?: number;
+  accuracy_m?: number;
+  taps_left?: number;
+  error?: string;
+}> {
+  return request(`/booking/checkin`, {
+    method: "POST",
+    body: JSON.stringify({ ...input, anonymous_id: getOrCreateAnonymousId() }),
+  });
+}
+
 export async function cancelBooking(
   handoffId: string
 ): Promise<{ success: boolean; error?: string }> {

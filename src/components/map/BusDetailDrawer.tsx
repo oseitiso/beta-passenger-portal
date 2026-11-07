@@ -112,7 +112,8 @@ function computeTarget(
   if (!(routeLen > 0)) return whole;
 
   const travelled = Math.max(0, routeLen - remainingKm);
-  const raw = stop.distance_from_origin_km - travelled;
+  const serverAhead = (stop as unknown as { km_ahead?: number | null }).km_ahead;
+  const raw = serverAhead != null ? serverAhead : stop.distance_from_origin_km - travelled;
   const km = Math.max(0, raw);
   // The server now sends a time for each stop that already counts the planned breaks.
   // The distance scaling is only the fallback for an older server answer.

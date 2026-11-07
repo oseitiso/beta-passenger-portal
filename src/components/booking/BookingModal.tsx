@@ -2,8 +2,9 @@
 
 import { useState, useEffect, useMemo, useRef } from "react";
 import {
-  X, Loader2, CheckCircle2, AlertCircle, Users, MapPin, Phone, User, ArrowRight, Ban, Armchair
+  X, Loader2, CheckCircle2, AlertCircle, Users, MapPin, Phone, User, ArrowRight, Ban
 } from "lucide-react";
+import { SeatIcon } from "@/components/SeatIcon";
 import {
   requestBooking, saveActiveBooking, recoverActiveBooking, RequestTimeoutError, type BookingResponse,
 } from "@/lib/passengerBookingApi";
@@ -440,7 +441,7 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
               </div>
               {ENABLE_SEAT_SELECTION && noSeatMap && (
                 <div className="mb-4 flex items-start gap-2 rounded-lg border border-neutral-700 bg-neutral-900 p-3 text-xs text-neutral-300">
-                  <Armchair className="mt-0.5 h-4 w-4 flex-shrink-0 text-neutral-400" />
+                  <SeatIcon size={18} className="mt-0.5 text-neutral-400" />
                   <span>
                     This bus has no seat map yet, so you cannot pick a seat. The driver will assign your seat{seats > 1 ? "s" : ""} when you board.
                   </span>
@@ -449,7 +450,7 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
               {ENABLE_SEAT_SELECTION && !noSeatMap && (
                 <div className="mb-4">
                   <button onClick={proceedToSeats} className={`w-full flex items-center justify-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-semibold transition-colors ${selectedSeatIds.length === seats ? "border-green-700/50 bg-green-950/20 text-green-400 hover:bg-green-950/40" : "border-neutral-700 bg-neutral-900 text-neutral-200 hover:bg-neutral-800"}`}>
-                    <Armchair className="h-4 w-4" />
+                    <SeatIcon size={20} />
                     {selectedSeatIds.length === seats ? `${seats} Seat${seats > 1 ? "s" : ""} Selected` : `Choose ${seats} seat${seats > 1 ? "s" : ""}`}
                   </button>
                 </div>

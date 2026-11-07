@@ -425,6 +425,39 @@ async function handleRecover(body: any): Promise<Response> {
   }
 }
 
+// Passenger "I'm here" check-in: one time-stamped location reading, stored as evidence for disputes.
+async function handleCheckin(body: any): Promise<Response> {
+  const reference = String(body?.reference ?? "").trim();
+  const anonId = String(body?.anonymous_id ?? "");
+  const lat = Number(body?.lat);
+  const lng = Number(body?.lng);
+  const acc =
+    body?.accuracy_m === null || body?.accuracy_m === undefined || !Number.isFinite(Number(body.accuracy_m))
+      ? null
+      : Number(body.accuracy_m);
+  if (
+    !reference || reference.length > 40 || !anonId || anonId.length > 100 ||
+    !Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180
+  ) {
+    return err("Missing or invalid check-in details.");
+  }
+  const deviceTime = typeof body?.device_time === "string" ? body.device_time : null;
+  try {
+    const rows = await sql`
+      select public.record_passenger_checkin(
+        ${reference}::text, ${anonId}::text, ${lat}::double precision, ${lng}::double precision,
+        ${acc}::double precision, ${deviceTime}::timestamptz
+      ) as result
+    `;
+    const result = rows[0]?.result;
+    if (!result) return err("No result from check-in", 500);
+    if (!result.success) return err(result.error ?? "Check-in failed", 400, result);
+    return ok(result);
+  } catch (e: any) {
+    return err(e?.message ?? "Internal error", 500);
+  }
+}
+
 // ------------------------------- Server ---------------------------------
 
 serve(async (req: Request) => {
@@ -469,6 +502,12 @@ serve(async (req: Request) => {
       const body = await parseJsonBody(req);
       if (!body) return err("Invalid JSON body");
       return await handleRecover(body);
+    }
+
+    if (pathname === "/booking/checkin" && req.method === "POST") {
+      const body = await parseJsonBody(req);
+      if (!body) return err("Invalid JSON body");
+      return await handleCheckin(body);
     }
 
     return err("Not found", 404);

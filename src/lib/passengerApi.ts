@@ -14,6 +14,7 @@ export interface PublicStop {
   lng: number | null;
   order: number;
   distance_from_origin_km: number | null;
+  km_ahead?: number | null;
   fare_zone: number | null;
   fare_zone_distance_km: number | null;
   /** True if a passenger can currently board here */
