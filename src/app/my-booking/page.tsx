@@ -328,6 +328,7 @@ export default function MyBookingPage() {
             <div className="text-lg font-semibold">No active booking</div>
             <div className="mt-2 text-sm text-neutral-400">Go to the map to request a seat on a live bus.</div>
             <Link href="/map" className="mt-4 inline-block rounded-lg bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-500">Find a bus</Link>
+            <Link href="/upcoming" className="mt-4 ml-2 inline-block rounded-lg border border-slate-600 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800">Upcoming trips</Link>
             <FindBookingForm onFound={() => loadBooking()} />
           </div>
         )}
