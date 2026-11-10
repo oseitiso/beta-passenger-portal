@@ -76,6 +76,36 @@ function MapFocusController({ bus, focusVersion }: { bus: PublicBus | null | und
   return null;
 }
 
+/**
+ * When a booking is accepted, zoom the map to the passenger's route once:
+ * boarding stop to drop-off stop (or bus to drop-off once on board). It runs
+ * once per booking, so the passenger can still pan and zoom freely afterwards.
+ */
+function BookedRouteFit({ fitKey, points }: { fitKey: string | null; points: [number, number][] }) {
+  const map = useMap();
+  const pointsRef = useRef(points);
+  pointsRef.current = points;
+  const doneRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!fitKey || doneRef.current === fitKey) return undefined;
+    const t = window.setTimeout(() => {
+      const pts = pointsRef.current;
+      if (pts.length === 0) return;
+      doneRef.current = fitKey;
+      map.invalidateSize({ animate: false });
+      if (pts.length === 1) {
+        map.flyTo(pts[0], 13, { duration: 1.2 });
+      } else {
+        map.fitBounds(L.latLngBounds(pts), { padding: [70, 70], maxZoom: 14, animate: true });
+      }
+    }, 500);
+    return () => window.clearTimeout(t);
+  }, [fitKey, map]);
+
+  return null;
+}
+
 function MapResizeController({ layoutKey }: { layoutKey?: string | number }) {
   const map = useMap();
   const rafRef = useRef<number | null>(null);
@@ -474,6 +504,34 @@ export function PassengerMap({
   const bookedBusPos: [number, number] | null =
     bkLat != null && bkLng != null ? [bkLat, bkLng] : null;
 
+  // Zoom target for the passenger's own booking: the stretch they will travel.
+  let fitKey: string | null = null;
+  let fitPoints: [number, number][] = [];
+  if (bookedState && bookedTripId && (boardingStop || alightingStop)) {
+    if (bookedState === "picked_up") {
+      if (bookedBusPos) fitPoints.push(bookedBusPos);
+      if (alightingStop) fitPoints.push([alightingStop.lat as number, alightingStop.lng as number]);
+    } else {
+      const lo = boardingStop ? boardingStop.order : null;
+      const hi = alightingStop ? alightingStop.order : null;
+      const between =
+        lo != null && hi != null && bookedRouteStops
+          ? bookedRouteStops
+              .filter((s) => s.lat != null && s.lng != null && s.order >= Math.min(lo, hi) && s.order <= Math.max(lo, hi))
+              .map((s) => [s.lat as number, s.lng as number] as [number, number])
+          : [];
+      if (between.length > 0) {
+        fitPoints = between;
+      } else {
+        if (boardingStop) fitPoints.push([boardingStop.lat as number, boardingStop.lng as number]);
+        if (alightingStop) fitPoints.push([alightingStop.lat as number, alightingStop.lng as number]);
+      }
+    }
+    if (fitPoints.length > 0) {
+      fitKey = [bookedTripId, bookedState, boardingStop?.name ?? "", alightingStop?.name ?? ""].join("|");
+    }
+  }
+
   return (
     <MapContainer
       center={DEFAULT_CENTER}
@@ -539,6 +597,7 @@ export function PassengerMap({
       )))}
 
       <MapFocusController bus={focusBus} focusVersion={focusVersion} />
+      <BookedRouteFit fitKey={fitKey} points={fitPoints} />
       <MapResizeController layoutKey={layoutKey} />
 
       {visibleBuses.map((bus) => {

@@ -262,12 +262,14 @@ export default function UpcomingPage() {
                     <div className="mt-3 flex items-center gap-2">
                       <div className="min-w-0 flex-1">
                         <div className="text-[9px] font-semibold uppercase tracking-widest text-neutral-500">
-                          {t.state === "LIVE" ? "Left" : "About"}
+                          {t.state === "LIVE" ? "Left" : t.from_time_known ? "About" : "Departs"}
                         </div>
                         <div className="text-base font-bold leading-tight text-white">
-                          {formatTime(t.state === "LIVE" ? t.departs_at : t.at_from)}
+                          {formatTime(t.state === "LIVE" || !t.from_time_known ? t.departs_at : t.at_from)}
                         </div>
-                        <div className="truncate text-xs text-neutral-400">{fromName}</div>
+                        <div className="truncate text-xs text-neutral-400">
+                          {t.state === "LIVE" || !t.from_time_known ? t.origin ?? "" : fromName}
+                        </div>
                       </div>
                       <div className="flex w-12 flex-shrink-0 items-center">
                         <span className="h-1.5 w-1.5 rounded-full bg-orange-500" />
@@ -275,11 +277,22 @@ export default function UpcomingPage() {
                         <span className="h-1.5 w-1.5 rounded-full bg-orange-500" />
                       </div>
                       <div className="min-w-0 flex-1 text-right">
-                        <div className="text-[9px] font-semibold uppercase tracking-widest text-neutral-500">Arrives about</div>
-                        <div className="text-base font-bold leading-tight text-white">{formatTime(t.at_to)}</div>
+                        <div className="text-[9px] font-semibold uppercase tracking-widest text-neutral-500">
+                          {t.to_time_known ? "Arrives about" : "Arrival"}
+                        </div>
+                        <div className={"leading-tight " + (t.to_time_known ? "text-base font-bold text-white" : "text-sm text-neutral-500")}>
+                          {t.to_time_known ? formatTime(t.at_to) : "Not set"}
+                        </div>
                         <div className="truncate text-xs text-neutral-400">{toName}</div>
                       </div>
                     </div>
+
+                    {!t.from_time_known && (
+                      <div className="mt-2 text-[11px] text-neutral-500">
+                        This is the time the trip leaves {t.origin ?? "its first stop"}. The operator has not set a
+                        time for {fromName}.
+                      </div>
+                    )}
 
                     <div className="mt-2 text-[11px] text-neutral-500">
                       Times are estimates from the operator&apos;s schedule.

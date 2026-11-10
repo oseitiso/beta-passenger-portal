@@ -48,14 +48,15 @@ self.addEventListener("push", (event) => {
       const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
       const apple = /iPhone|iPad|iPod|Macintosh/.test(self.navigator.userAgent || "");
       // The on-screen toast already covers an open app. Apple requires every push to be shown.
-      if (!apple && wins.some((c) => c.visibilityState === "visible")) return;
+      const isTripAlert = String(data.kind || "").startsWith("trip_");
+      if (!isTripAlert && !apple && wins.some((c) => c.visibilityState === "visible")) return;
       const opts: any = {
         body: data.body || "",
         tag: data.tag || "beta",
         icon: "/icon-192.png",
         badge: "/icon-192.png",
         renotify: true,
-        requireInteraction: data.kind === "arrived",
+        requireInteraction: data.kind === "arrived" || data.kind === "trip_started",
         data: { url: data.url || "/map" },
       };
       await self.registration.showNotification(data.title || "B-ETA", opts);
@@ -72,6 +73,11 @@ self.addEventListener("notificationclick", (event) => {
       for (const c of wins) {
         if ("focus" in c) {
           await c.focus();
+          if (url && "navigate" in c) {
+            try {
+              await (c as any).navigate(url);
+            } catch {}
+          }
           return;
         }
       }

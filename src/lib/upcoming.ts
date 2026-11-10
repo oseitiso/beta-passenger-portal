@@ -22,6 +22,8 @@ export interface UpcomingTrip {
   at_to: string;
   state: "LIVE" | "ASSIGNED" | "TENTATIVE";
   alert_ok: boolean;
+  from_time_known: boolean;
+  to_time_known: boolean;
 }
 
 async function rpc<T>(name: string, args: Record<string, unknown>): Promise<T> {
