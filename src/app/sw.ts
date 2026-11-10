@@ -35,4 +35,48 @@ const serwist = new Serwist({
   ],
 });
 
+// ---- Web Push: alerts that arrive even when the app is closed ----
+self.addEventListener("push", (event) => {
+  let data: any = {};
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch {
+    data = { title: "B-ETA", body: event.data ? event.data.text() : "" };
+  }
+  event.waitUntil(
+    (async () => {
+      const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+      const apple = /iPhone|iPad|iPod|Macintosh/.test(self.navigator.userAgent || "");
+      // The on-screen toast already covers an open app. Apple requires every push to be shown.
+      if (!apple && wins.some((c) => c.visibilityState === "visible")) return;
+      const opts: any = {
+        body: data.body || "",
+        tag: data.tag || "beta",
+        icon: "/icon-192.png",
+        badge: "/icon-192.png",
+        renotify: true,
+        requireInteraction: data.kind === "arrived",
+        data: { url: data.url || "/map" },
+      };
+      await self.registration.showNotification(data.title || "B-ETA", opts);
+    })()
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const url = (event.notification.data && event.notification.data.url) || "/map";
+  event.waitUntil(
+    (async () => {
+      const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+      for (const c of wins) {
+        if ("focus" in c) {
+          await c.focus();
+          return;
+        }
+      }
+      await self.clients.openWindow(url);
+    })()
+  );
+});
 serwist.addEventListeners();

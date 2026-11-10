@@ -21,6 +21,7 @@ import {
   type SearchedLocation,
 } from "@/lib/passengerApi";
 import { getMatchedTracks, subscribeToPassengerMapChanges, type MatchedTrack } from "@/lib/realtime";
+import PushOptIn from "@/components/booking/PushOptIn";
 import {
   BOTSWANA_LOCATIONS,
   type BotswanaLocation,
@@ -368,6 +369,7 @@ export default function MapPage() {
   const [matchedTracks, setMatchedTracks] = useState<Record<string, MatchedTrack>>({});
   const [focusVersion, setFocusVersion] = useState(0);
   const [loading, setLoading] = useState(true);
+  const hasLoadedRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedBusId, setSelectedBusId] = useState<string | null>(null);
   const busesWithMatchedTracks = useMemo(() => buses.map((bus) => {
@@ -480,7 +482,7 @@ export default function MapPage() {
   }, [origin, destination]);
 
   const fetchBuses = useCallback(async () => {
-    setLoading(true);
+    if (!hasLoadedRef.current) setLoading(true);
     try {
       const data = await getActiveBuses({
         from: debouncedOrigin || undefined,
@@ -504,6 +506,7 @@ export default function MapPage() {
           : "Buses could not be loaded right now. Retrying automatically."
       );
     } finally {
+      hasLoadedRef.current = true;
       setLoading(false);
     }
   }, [debouncedOrigin, debouncedDestination]);
@@ -610,7 +613,9 @@ export default function MapPage() {
 
     const throttledFetch = () => {
       const now = Date.now();
-      if (now - lastFetchRef.current < REALTIME_THROTTLE_MS) return;
+      if (document.hidden) return;
+
+      if (now - lastFetchRef.current < Math.max(REALTIME_THROTTLE_MS, 10_000)) return;
       lastFetchRef.current = now;
       fetchRef.current();
       refreshActiveBooking();
@@ -632,18 +637,60 @@ export default function MapPage() {
       });
     };
 
+    let live = false;
+
+    let lastHiddenBooking = 0;
+
     const unsubscribe = subscribeToPassengerMapChanges(throttledFetch, applyMatchedTrackChange, (status: any) => {
+      live = status === "SUBSCRIBED";
+
       if (status === "SUBSCRIBED") {
         console.log("[realtime] Subscribed to passenger map updates");
       }
     });
 
+    const onVisible = () => {
+
+      if (document.hidden) return;
+
+      lastFetchRef.current = Date.now();
+
+      fetchRef.current();
+
+      refreshActiveBooking();
+
+    };
+
+    document.addEventListener("visibilitychange", onVisible);
+
+
+
     const interval = setInterval(() => {
+
+      if (document.hidden) {
+
+        if (Date.now() - lastHiddenBooking >= 60_000) {
+
+          lastHiddenBooking = Date.now();
+
+          refreshActiveBooking();
+
+        }
+
+        return;
+
+      }
+
+      if (live && Date.now() - lastFetchRef.current < 90_000) return;
+
+      lastFetchRef.current = Date.now();
       fetchRef.current();
       refreshActiveBooking();
     }, 15_000);
 
     return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+
       unsubscribe();
       clearInterval(interval);
     };
@@ -874,6 +921,10 @@ export default function MapPage() {
           <BellRing className="h-4 w-4" />
           {toastText}
         </div>
+      )}
+
+      {activeBooking && !["EXPIRED", "DECLINED", "NO_SHOW", "COMPLETED", "CANCELLED"].includes(String(activeBooking.handoff_status)) && (
+        <PushOptIn reference={activeBooking.booking_reference} />
       )}
 
       <div className="flex flex-1 overflow-hidden">

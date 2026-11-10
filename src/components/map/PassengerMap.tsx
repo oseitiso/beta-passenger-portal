@@ -479,7 +479,7 @@ export function PassengerMap({
       center={DEFAULT_CENTER}
       zoom={DEFAULT_ZOOM}
       zoomControl={false}
-      style={{ height: "100%", width: "100%", background: "#0a0a0a" }}
+      style={{ height: "100%", width: "100%", background: "#e8e6e0" }}
       className="rounded-lg"
     >
       <ZoomControl position="bottomright" />
@@ -487,6 +487,8 @@ export function PassengerMap({
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
         maxZoom={19}
+        keepBuffer={6}
+        updateWhenZooming={false}
       />
 
       <ZoomTracker onZoomChange={setCurrentZoom} />
