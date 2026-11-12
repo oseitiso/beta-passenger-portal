@@ -16,6 +16,8 @@ import {
   type UpcomingStop,
   type UpcomingTrip,
 } from "@/lib/upcoming";
+import { fetchMyPretripTrips, type MyPretripTrip } from "@/lib/pretrip";
+import { PlaceSearch } from "@/components/PlaceSearch";
 import { enableTripAlert, cancelTripAlert } from "@/lib/tripAlerts";
 import { pushSupported, isIosNeedingInstall } from "@/lib/push";
 
@@ -23,11 +25,6 @@ const STATE_LABEL: Record<UpcomingTrip["state"], string> = {
   LIVE: "On the road now",
   ASSIGNED: "Bus assigned",
   TENTATIVE: "Scheduled",
-};
-const STATE_STYLE: Record<UpcomingTrip["state"], string> = {
-  LIVE: "border border-green-900/50 bg-green-950/40 text-green-300",
-  ASSIGNED: "border border-orange-900/50 bg-orange-950/40 text-orange-300",
-  TENTATIVE: "border border-neutral-700 bg-neutral-800 text-neutral-300",
 };
 
 export default function UpcomingPage() {
@@ -41,6 +38,7 @@ export default function UpcomingPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [alerted, setAlerted] = useState<string[]>([]);
+  const [mine, setMine] = useState<Record<string, MyPretripTrip>>({});
   const [busyTrip, setBusyTrip] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [canPush, setCanPush] = useState(true);
@@ -61,6 +59,10 @@ export default function UpcomingPage() {
       })
       .catch(() => setStopsError(true));
   }, []);
+
+  useEffect(() => {
+    void fetchMyPretripTrips().then(setMine);
+  }, [trips]);
 
   const search = useCallback(async () => {
     if (!from || !to || from === to) {
@@ -116,7 +118,7 @@ export default function UpcomingPage() {
           <ArrowLeft className="h-4 w-4" />
           Back to map
         </Link>
-        <div className="text-xs text-neutral-500">Upcoming trips</div>
+        <Link href="/pretrip" className="text-xs text-orange-400 hover:text-orange-300">My seats</Link>
       </header>
 
       <main className="w-full max-w-2xl px-4">
@@ -146,38 +148,19 @@ export default function UpcomingPage() {
           </div>
         )}
 
-        <div className="grid grid-cols-2 gap-3">
-          <label className="text-xs text-neutral-400">
-            From
-            <select
-              value={from}
-              onChange={(e) => {
-                setFrom(e.target.value);
-                if (e.target.value === to) setTo("");
-              }}
-              className={selectCls}
-            >
-              <option value="">Choose</option>
-              {fromStops.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="text-xs text-neutral-400">
-            To
-            <select value={to} onChange={(e) => setTo(e.target.value)} className={selectCls}>
-              <option value="">Choose</option>
-              {toStops.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          </label>
+        <div className="space-y-2">
+          <PlaceSearch
+            label="From"
+            stops={fromStops}
+            value={from}
+            placeholder="Type a town or stop"
+            onChange={(id) => {
+              setFrom(id);
+              if (id === to) setTo("");
+            }}
+          />
+          <PlaceSearch label="To" stops={toStops} value={to} placeholder="Type a town or stop" onChange={setTo} />
         </div>
-
         <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
           {days.map((d) => (
             <button
@@ -194,6 +177,13 @@ export default function UpcomingPage() {
             </button>
           ))}
         </div>
+
+        {trips && trips.some((x) => !x.from_time_known || !x.to_time_known) && (
+          <div className="mt-3 text-[11px] text-neutral-500">
+            Times come from the operator&apos;s schedule. Where an operator has not set a time for a stop, the departure
+            time of the first stop is shown, or the time is marked not set.
+          </div>
+        )}
 
         {iosInstall && (
           <div className="mt-4 rounded-lg border border-neutral-800 bg-neutral-900/60 p-3 text-xs text-neutral-300">
@@ -212,7 +202,7 @@ export default function UpcomingPage() {
           </div>
         )}
 
-        <div className="mt-5 space-y-4">
+        <div className="mt-4 space-y-2.5">
           {!from || !to ? (
             <div className="rounded-xl border border-neutral-800 bg-neutral-900/30 p-8 text-center">
               <MapPin className="mx-auto mb-3 h-10 w-10 text-neutral-600" />
@@ -239,92 +229,108 @@ export default function UpcomingPage() {
           ) : (
             trips?.map((t) => {
               const on = alerted.includes(t.trip_id);
+              const btn =
+                "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium disabled:opacity-50";
               return (
                 <div
                   key={t.trip_id}
-                  className="relative w-full overflow-hidden rounded-2xl border border-neutral-700/60 bg-neutral-900 shadow-xl"
+                  className="w-full overflow-hidden rounded-xl border border-neutral-700/60 bg-neutral-900 shadow-lg"
                 >
-                  <div className="flex items-center justify-between bg-gradient-to-r from-yellow-500 to-orange-500 px-4 py-1.5 text-black">
-                    <h2 className="truncate text-[11px] font-black uppercase tracking-[0.2em]">
+                  <div className="flex items-center justify-between bg-gradient-to-r from-yellow-500 to-orange-500 px-3 py-1 text-black">
+                    <h2 className="truncate text-[10px] font-black uppercase tracking-[0.18em]">
                       {t.operator ?? "Operator"}
                     </h2>
-                    <span className="text-[10px] font-extrabold tracking-widest opacity-70">B-ETA</span>
+                    <span className="flex-shrink-0 text-[10px] font-bold opacity-75">{STATE_LABEL[t.state]}</span>
                   </div>
 
-                  <div className="px-4 pt-3 pb-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0 text-xs text-neutral-400">{t.route}</div>
-                      <span className={"flex-shrink-0 rounded-full px-2 py-0.5 text-[11px] " + STATE_STYLE[t.state]}>
-                        {STATE_LABEL[t.state]}
-                      </span>
-                    </div>
-
-                    <div className="mt-3 flex items-center gap-2">
+                  <div className="px-3 py-2">
+                    <div className="flex items-center gap-2">
                       <div className="min-w-0 flex-1">
-                        <div className="text-[9px] font-semibold uppercase tracking-widest text-neutral-500">
-                          {t.state === "LIVE" ? "Left" : t.from_time_known ? "About" : "Departs"}
-                        </div>
-                        <div className="text-base font-bold leading-tight text-white">
+                        <div className="text-lg font-bold leading-tight text-white">
                           {formatTime(t.state === "LIVE" || !t.from_time_known ? t.departs_at : t.at_from)}
+                          {t.state !== "LIVE" && t.from_time_known && (
+                            <span className="ml-1 text-[10px] font-normal text-neutral-500">about</span>
+                          )}
                         </div>
-                        <div className="truncate text-xs text-neutral-400">
+                        <div className="truncate text-[11px] text-neutral-400">
                           {t.state === "LIVE" || !t.from_time_known ? t.origin ?? "" : fromName}
                         </div>
                       </div>
-                      <div className="flex w-12 flex-shrink-0 items-center">
+                      <div className="flex w-10 flex-shrink-0 items-center">
                         <span className="h-1.5 w-1.5 rounded-full bg-orange-500" />
                         <span className="h-px flex-1 border-t border-dashed border-neutral-500" />
                         <span className="h-1.5 w-1.5 rounded-full bg-orange-500" />
                       </div>
                       <div className="min-w-0 flex-1 text-right">
-                        <div className="text-[9px] font-semibold uppercase tracking-widest text-neutral-500">
-                          {t.to_time_known ? "Arrives about" : "Arrival"}
-                        </div>
-                        <div className={"leading-tight " + (t.to_time_known ? "text-base font-bold text-white" : "text-sm text-neutral-500")}>
-                          {t.to_time_known ? formatTime(t.at_to) : "Not set"}
-                        </div>
-                        <div className="truncate text-xs text-neutral-400">{toName}</div>
-                      </div>
-                    </div>
-
-                    {!t.from_time_known && (
-                      <div className="mt-2 text-[11px] text-neutral-500">
-                        This is the time the trip leaves {t.origin ?? "its first stop"}. The operator has not set a
-                        time for {fromName}.
-                      </div>
-                    )}
-
-                    <div className="mt-2 text-[11px] text-neutral-500">
-                      Times are estimates from the operator&apos;s schedule.
-                    </div>
-
-                    <div className="mt-3">
-                      {t.state === "LIVE" ? (
-                        <Link
-                          href="/map"
-                          className="inline-flex items-center gap-2 rounded-lg bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-500"
+                        <div
+                          className={
+                            "leading-tight " + (t.to_time_known ? "text-lg font-bold text-white" : "text-sm text-neutral-500")
+                          }
                         >
-                          <MapPin className="h-4 w-4" /> View on map
+                          {t.to_time_known ? formatTime(t.at_to) : "Time not set"}
+                        </div>
+                        <div className="truncate text-[11px] text-neutral-400">{toName}</div>
+                      </div>
+                    </div>
+
+                    <div className="mt-0.5 truncate text-[11px] text-neutral-500">{t.route}</div>
+
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      {mine[t.trip_id] ? (
+                        <Link
+                          href="/pretrip"
+                          className={btn + " border border-green-900/60 bg-green-950/40 text-green-300 hover:bg-green-950/70"}
+                        >
+                          {mine[t.trip_id].seat_numbers.length > 1 ? "Seats " : "Seat "}
+                          {mine[t.trip_id].seat_numbers.join(" + ")}{" "}
+                          {mine[t.trip_id].state === "BOARDED" ? "boarded" : "requested"}
+                        </Link>
+                      ) : t.can_pretrip && (
+                        <Link
+                          href={
+                            "/pretrip/new?" +
+                            new URLSearchParams({
+                              trip: t.trip_id,
+                              to,
+                              o: t.operator ?? "",
+                              r: t.route ?? "",
+                              t: t.departs_at,
+                              tn: toName,
+                              fn: fromName,
+                            }).toString()
+                          }
+                          className={btn + " bg-orange-600 text-white hover:bg-orange-500"}
+                        >
+                          Request a seat
+                          {typeof t.pretrip_seats_free === "number" ? " - " + t.pretrip_seats_free + " free" : ""}
+                        </Link>
+                      )}
+                      {t.state === "LIVE" ? (
+                        <Link href="/map" className={btn + " bg-orange-600 text-white hover:bg-orange-500"}>
+                          <MapPin className="h-3.5 w-3.5" /> View on map
                         </Link>
                       ) : (
                         <button
                           onClick={() => toggleAlert(t)}
                           disabled={busyTrip === t.trip_id || !canPush || iosInstall}
                           className={
-                            "inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50 " +
+                            btn +
+                            " " +
                             (on
                               ? "border border-neutral-600 bg-neutral-800 text-neutral-100 hover:bg-neutral-700"
+                              : t.can_pretrip
+                              ? "border border-neutral-600 text-neutral-200 hover:bg-neutral-800"
                               : "bg-orange-600 text-white hover:bg-orange-500")
                           }
                         >
                           {busyTrip === t.trip_id ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
                           ) : on ? (
-                            <BellOff className="h-4 w-4" />
+                            <BellOff className="h-3.5 w-3.5" />
                           ) : (
-                            <Bell className="h-4 w-4" />
+                            <Bell className="h-3.5 w-3.5" />
                           )}
-                          {on ? "Alert on - tap to turn off" : "Alert me when this trip starts"}
+                          {on ? "Alert on" : "Alert me when it starts"}
                         </button>
                       )}
                     </div>

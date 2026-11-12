@@ -1,6 +1,6 @@
 // passenger-push: stores a passenger's push subscription (POST .../subscribe),
 // stores/cancels "alert me when this trip starts" requests (POST .../alert-subscribe, .../alert-cancel)
-// and sends queued alerts (POST with the x-push-secret header, from pg_net).
+// sends pre-trip seat reminders ({pretrip_reminder}) and sends queued alerts (POST with the x-push-secret header, from pg_net).
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 import webpush from "npm:web-push@3.6.7";
 
@@ -219,6 +219,72 @@ async function dispatchTripAlert(body: any): Promise<Response> {
   return json({ success: true, sent, failed });
 }
 
+async function dispatchPretrip(body: any): Promise<Response> {
+  const id = String(body?.pretrip_reminder?.id ?? "");
+  const kind = String(body?.pretrip_reminder?.kind ?? "");
+  if (!id || !["claim_open", "last_call", "released", "bus_left_early", "trip_changed"].includes(kind)) {
+    return json({ success: false, error: "Bad request." }, 400);
+  }
+  const pub = Deno.env.get("VAPID_PUBLIC_KEY");
+  const priv = Deno.env.get("VAPID_PRIVATE_KEY");
+  const subject = Deno.env.get("VAPID_SUBJECT");
+  if (!pub || !priv || !subject) return json({ success: false, error: "VAPID keys missing." }, 500);
+  webpush.setVapidDetails(subject, pub, priv);
+
+  const { data: p, error } = await supabase.rpc("get_pretrip_push", { p_id: id });
+  if (error || !p || !p.endpoint) return json({ success: true, sent: 0, failed: 0 });
+
+  const what = [p.operator, p.route].filter(Boolean).join(" - ");
+  const seats = Array.isArray(p.seat_numbers) ? p.seat_numbers.join(", ") : "";
+  const time = (iso: string) =>
+    new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Africa/Gaborone" });
+  const messages: Record<string, { title: string; body: string; url: string }> = {
+    claim_open: {
+      title: "Your seat is ready to claim",
+      body: (what ? what + ". " : "") + "Be at the first stop before " + time(p.claim_deadline_at) +
+        " and open B-ETA to get your ticket for seat " + seats + ".",
+      url: "/pretrip",
+    },
+    last_call: {
+      title: "Claim your seat now",
+      body: "Seat " + seats + " is released at " + time(p.claim_deadline_at) +
+        " if you are not at the stop. Open B-ETA to claim it.",
+      url: "/pretrip",
+    },
+    released: {
+      title: "Your seat was released",
+      body: "It was not claimed in time" + (what ? " (" + what + ")" : "") + ". You can still request a live seat when the bus starts.",
+      url: "/upcoming",
+    },
+    bus_left_early: {
+      title: "The bus has left early",
+      body: (what ? what + " has started. " : "The bus has started. ") + "Open the map to request a seat.",
+      url: "/map",
+    },
+    trip_changed: {
+      title: "Your trip has changed",
+      body: (what ? what + ": " : "") + "your held seat was released because the trip changed. Please check Upcoming trips.",
+      url: "/upcoming",
+    },
+  };
+  const m = messages[kind];
+  const payload = JSON.stringify({ title: m.title, body: m.body, tag: "pretrip-" + id, kind: "pretrip_" + kind, url: m.url });
+
+  try {
+    await webpush.sendNotification(
+      { endpoint: p.endpoint, keys: { p256dh: p.p256dh, auth: p.auth } },
+      payload,
+      { TTL: 900, urgency: "high" }
+    );
+    return json({ success: true, sent: 1, failed: 0 });
+  } catch (e: any) {
+    if (e?.statusCode === 404 || e?.statusCode === 410) {
+      await supabase.rpc("clear_pretrip_endpoint", { p_id: id });
+    }
+    return json({ success: true, sent: 0, failed: 1 });
+  }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   if (req.method !== "POST") return json({ success: false, error: "Method not allowed." }, 405);
@@ -242,6 +308,14 @@ Deno.serve(async (req: Request) => {
       return json({ success: false, error: "Forbidden." }, 403);
     }
     return dispatchTripAlert(body);
+  }
+  if (body?.pretrip_reminder) {
+    const expected = Deno.env.get("PUSH_FUNCTION_SECRET");
+    if (!expected) return json({ success: false, error: "Not configured." }, 500);
+    if (req.headers.get("x-push-secret") !== expected) {
+      return json({ success: false, error: "Forbidden." }, 403);
+    }
+    return dispatchPretrip(body);
   }
   return dispatch(req, body);
 });

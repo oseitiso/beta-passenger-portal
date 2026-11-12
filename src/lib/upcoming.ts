@@ -22,6 +22,8 @@ export interface UpcomingTrip {
   at_to: string;
   state: "LIVE" | "ASSIGNED" | "TENTATIVE";
   alert_ok: boolean;
+  can_pretrip?: boolean;
+  pretrip_seats_free?: number | null;
   from_time_known: boolean;
   to_time_known: boolean;
 }
