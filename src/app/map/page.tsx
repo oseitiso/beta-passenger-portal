@@ -41,7 +41,10 @@ import {
   appendBookingHistory,
   type BookingDetail,
   checkInAtStop,
+  getReleaseCase,
+  answerReleaseCase,
 } from "@/lib/passengerBookingApi";
+import { syncPretripTickets } from "@/lib/pretripSync";
 import {
   logSearchSubmitted,
   logLocationSelected,
@@ -416,6 +419,14 @@ export default function MapPage() {
   const [recentlyEndedBooking, setRecentlyEndedBooking] =
     useState<BookingDetail | null>(null);
 
+  const [toast, setToast] = useState<{ id: number; text: string; tone: "info" | "warn" } | null>(null);
+  const toastedRef = useRef<Set<string>>(new Set());
+  const showToast = useCallback((text: string, tone: "info" | "warn" = "info", ms = 9000) => {
+    const id = Date.now();
+    setToast({ id, text, tone });
+    setTimeout(() => setToast((cur) => (cur && cur.id === id ? null : cur)), ms);
+  }, []);
+
   const lastFetchRef = useRef<number>(0);
   const fetchRef = useRef<() => void>(() => {});
 
@@ -569,6 +580,31 @@ export default function MapPage() {
             result.booking.handoff_status === "COMPLETED" ||
             result.booking.handoff_status === "EXPIRED";
 
+          const endedStatus = isDisrupted ? "DISRUPTED" : result.booking.handoff_status;
+          const toastKey = result.booking.handoff_id + ":" + endedStatus;
+          let alreadyShown = toastedRef.current.has(toastKey);
+          if (!alreadyShown) {
+            try {
+              const raw = JSON.parse(localStorage.getItem("b-eta-toasted") || "[]");
+              const list: string[] = Array.isArray(raw) ? raw : [];
+              if (list.includes(toastKey)) alreadyShown = true;
+              else localStorage.setItem("b-eta-toasted", JSON.stringify([...list, toastKey].slice(-40)));
+            } catch {
+              /* storage unavailable: shown once per page load */
+            }
+          }
+          if (!alreadyShown) {
+            toastedRef.current.add(toastKey);
+            showToast(
+              endedStatus === "COMPLETED" ? "Your trip has ended. Thank you for travelling with B-ETA."
+              : endedStatus === "DISRUPTED" ? "The trip has ended before your journey was completed. It is saved in your trip history."
+              : endedStatus === "NO_SHOW" ? "The trip has ended and your seat was released because you did not board."
+              : endedStatus === "CANCELLED" ? "Your booking was cancelled."
+              : endedStatus === "DECLINED" ? "Your booking request was declined."
+              : "Your booking has ended.",
+              endedStatus === "COMPLETED" ? "info" : "warn"
+            );
+          }
           setRecentlyEndedBooking(result.booking);
 
           if (isGracefulEnd && !isDisrupted) {
@@ -592,6 +628,31 @@ export default function MapPage() {
     }
   }, []);
 
+  // Pre-trip passengers: a claimed or boarded seat becomes a normal ticket on the map,
+  // and an early departure is announced.
+  useEffect(() => {
+    if (!mounted) return;
+    let cancelled = false;
+    const run = async () => {
+      if (document.hidden) return;
+      try {
+        const res = await syncPretripTickets();
+        if (cancelled) return;
+        if (res.ticketsChanged) await refreshActiveBooking();
+        if (res.messages.length > 0) showToast(res.messages.join(" "), "warn", 20000);
+      } catch {
+        /* the map must keep working if this check fails */
+      }
+    };
+    void run();
+    const timer = setInterval(run, 20_000);
+    document.addEventListener("visibilitychange", run);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", run);
+    };
+  }, [mounted, refreshActiveBooking, showToast]);
   useEffect(() => {
     if (!mounted) return;
     fetchBuses();
@@ -809,6 +870,57 @@ export default function MapPage() {
     return zones;
   }, [bookedBus]);
 
+  // "Did you board the bus?" question: opened when the bus moved on while this passenger had checked in at the stop.
+  const [releaseCase, setReleaseCase] = useState<{ deadline_at?: string } | null>(null);
+  const [releaseBusy, setReleaseBusy] = useState(false);
+  const [releaseNote, setReleaseNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    const ref = activeBooking?.booking_reference;
+    if (!ref || activeBooking?.handoff_status !== "ACCEPTED") {
+      setReleaseCase(null);
+      return;
+    }
+    let stopped = false;
+    const poll = async () => {
+      try {
+        const r = await getReleaseCase(ref);
+        if (!stopped) setReleaseCase(r.open && r.state === "OPEN" ? { deadline_at: r.deadline_at } : null);
+      } catch {
+        /* keep the last known state */
+      }
+    };
+    poll();
+    const id = setInterval(poll, 15000);
+    return () => {
+      stopped = true;
+      clearInterval(id);
+    };
+  }, [activeBooking?.booking_reference, activeBooking?.handoff_status]);
+
+  const answerRelease = async (boarded: boolean) => {
+    const ref = activeBooking?.booking_reference;
+    if (!ref || releaseBusy) return;
+    setReleaseBusy(true);
+    try {
+      const res = await answerReleaseCase(ref, boarded);
+      if (res.success) {
+        setReleaseCase(null);
+        setReleaseNote(
+          boarded
+            ? "Thank you. The driver will confirm your boarding with your PIN."
+            : "Thank you. Your seat has been released and no penalty applies."
+        );
+      } else {
+        setReleaseNote(res.error ?? "Could not record your answer. Please try again.");
+      }
+    } catch {
+      setReleaseNote("No connection. Please try again.");
+    } finally {
+      setReleaseBusy(false);
+    }
+  };
+
   const handleCheckIn = () => {
     if (checkinBusy || checkinState?.ok || !activeBooking) return;
     if (typeof navigator === "undefined" || !navigator.geolocation) {
@@ -916,6 +1028,39 @@ export default function MapPage() {
         </div>
       </header>
 
+      {releaseCase && (
+        <div role="dialog" aria-label="Did you board the bus?" className="absolute left-1/2 top-36 z-[2100] w-[92%] max-w-sm -translate-x-1/2 rounded-xl border border-orange-600 bg-neutral-900 p-4 shadow-2xl">
+          <div className="text-sm font-semibold">Did you board the bus?</div>
+          <p className="mt-1 text-xs text-neutral-300">
+            The bus has moved on from your stop. If you did not board, your seat will be released and no penalty applies. Please answer
+            {releaseCase.deadline_at
+              ? " before " + new Date(releaseCase.deadline_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+              : " within 5 minutes"}.
+          </p>
+          <div className="mt-3 flex gap-2">
+            <button disabled={releaseBusy} onClick={() => answerRelease(true)} className="flex-1 rounded-lg bg-green-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60">
+              Yes, I boarded
+            </button>
+            <button disabled={releaseBusy} onClick={() => answerRelease(false)} className="flex-1 rounded-lg bg-neutral-700 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60">
+              No, I did not
+            </button>
+          </div>
+        </div>
+      )}
+      {releaseNote && !releaseCase && (
+        <div role="status" onClick={() => setReleaseNote(null)} className="absolute left-1/2 top-36 z-[2100] w-[92%] max-w-sm -translate-x-1/2 cursor-pointer rounded-xl border border-neutral-700 bg-neutral-900 p-3 text-xs text-neutral-200 shadow-2xl">
+          {releaseNote} <span className="text-neutral-500">(tap to close)</span>
+        </div>
+      )}
+      {toast && (
+        <div
+          role="status"
+          onClick={() => setToast(null)}
+          className={"fixed left-1/2 top-4 z-[2000] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 cursor-pointer rounded-xl border px-4 py-3 text-sm shadow-lg " + (toast.tone === "warn" ? "border-amber-700 bg-amber-950/95 text-amber-100" : "border-neutral-700 bg-neutral-900/95 text-neutral-100")}
+        >
+          {toast.text}
+        </div>
+      )}
       {arrivalAlert && (
         <div role="button" tabIndex={0} onClick={handleCheckIn} onKeyDown={(e) => { if (e.key === "Enter") handleCheckIn(); }} className={`absolute left-1/2 top-20 z-[2000] flex -translate-x-1/2 cursor-pointer items-center gap-2 rounded-full px-4 py-2 text-sm font-bold text-white shadow-lg ${checkinState?.ok ? "bg-green-700" : arrivalAlert === "arrived" ? "bg-green-600" : "bg-orange-600"} ${checkinState || checkinBusy ? "" : "animate-pulse"}`}>
           <BellRing className="h-4 w-4" />

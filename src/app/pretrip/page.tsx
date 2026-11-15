@@ -14,6 +14,7 @@ import {
   formatCountdown,
   type PretripView,
 } from "@/lib/pretrip";
+import { processPretripViews } from "@/lib/pretripSync";
 import { formatTime } from "@/lib/upcoming";
 
 interface Pos {
@@ -52,6 +53,7 @@ export default function MyPretripPage() {
     setViews(out);
     setMissing(gone);
     setLoading(false);
+    void processPretripViews(Object.values(out));
   }, []);
 
   useEffect(() => {
@@ -142,7 +144,8 @@ export default function MyPretripPage() {
     void load();
   }
 
-  const ordered = refs.map((r) => views[r]).filter(Boolean) as PretripView[];
+  const ENDED_TRIP = ["COMPLETED", "CANCELLED", "MISSED"];
+  const ordered = (refs.map((r) => views[r]).filter(Boolean) as PretripView[]).filter((v) => !(["CLAIMED", "BOARDED"].includes(String(v.state)) && ENDED_TRIP.includes(String((v as any).trip_status))));
 
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100 flex flex-col items-center pt-6 pb-20">

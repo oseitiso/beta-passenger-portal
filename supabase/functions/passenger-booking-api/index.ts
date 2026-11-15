@@ -323,6 +323,18 @@ async function lookupBooking(
     }
 
     const booking: any = rows[0];
+    // Pre-trip seats are kept on the pre-trip record once the passenger has boarded.
+    if (!booking.seat_numbers || booking.seat_numbers.length === 0) {
+      try {
+        const pb = await sql`
+          select seat_numbers from pretrip_bookings
+          where handoff_id = ${booking.handoff_id}::uuid limit 1
+        `;
+        if (pb[0]?.seat_numbers) booking.seat_numbers = pb[0].seat_numbers;
+      } catch (e) {
+        console.error("[booking/status] pre-trip seat lookup failed:", e);
+      }
+    }
 
     // A lookup from a new device must also prove the phone number. A wrong
     // number is answered exactly like an unknown reference.
@@ -425,6 +437,36 @@ async function handleRecover(body: any): Promise<Response> {
   }
 }
 
+// "Did you board the bus?" question opened when a passenger who checked in was left at a stop.
+async function handleReleaseCase(body: any): Promise<Response> {
+  const reference = String(body?.reference ?? "").trim();
+  const anonId = String(body?.anonymous_id ?? "");
+  if (!reference || reference.length > 40 || !anonId || anonId.length > 100) return err("Missing booking details.");
+  try {
+    const rows = await sql`select public.get_release_case(${reference}::text, ${anonId}::text) as result`;
+    return ok(rows[0]?.result ?? { open: false });
+  } catch (e: any) {
+    return err(e?.message ?? "Internal error", 500);
+  }
+}
+
+async function handleReleaseAnswer(body: any): Promise<Response> {
+  const reference = String(body?.reference ?? "").trim();
+  const anonId = String(body?.anonymous_id ?? "");
+  if (!reference || reference.length > 40 || !anonId || anonId.length > 100 || typeof body?.boarded !== "boolean") {
+    return err("Missing booking details.");
+  }
+  const boarded = body.boarded === true;
+  try {
+    const rows = await sql`select public.answer_release_case(${reference}::text, ${anonId}::text, ${boarded}::boolean) as result`;
+    const result = rows[0]?.result;
+    if (!result) return err("No result", 500);
+    if (!result.success) return err(result.error ?? "Could not record the answer", 400, result);
+    return ok(result);
+  } catch (e: any) {
+    return err(e?.message ?? "Internal error", 500);
+  }
+}
 // Passenger "I'm here" check-in: one time-stamped location reading, stored as evidence for disputes.
 async function handleCheckin(body: any): Promise<Response> {
   const reference = String(body?.reference ?? "").trim();
@@ -504,6 +546,17 @@ serve(async (req: Request) => {
       return await handleRecover(body);
     }
 
+    if (pathname === "/booking/release-case" && req.method === "POST") {
+      const body = await parseJsonBody(req);
+      if (!body) return err("Invalid JSON body");
+      return await handleReleaseCase(body);
+    }
+
+    if (pathname === "/booking/release-answer" && req.method === "POST") {
+      const body = await parseJsonBody(req);
+      if (!body) return err("Invalid JSON body");
+      return await handleReleaseAnswer(body);
+    }
     if (pathname === "/booking/checkin" && req.method === "POST") {
       const body = await parseJsonBody(req);
       if (!body) return err("Invalid JSON body");

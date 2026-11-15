@@ -257,8 +257,8 @@ async function dispatchPretrip(body: any): Promise<Response> {
       url: "/upcoming",
     },
     bus_left_early: {
-      title: "The bus has left early",
-      body: (what ? what + " has started. " : "The bus has started. ") + "Open the map to request a seat.",
+      title: "The bus left early - your seat was released",
+      body: (what ? what + " has already left. " : "The bus has already left. ") + "Your pre-booked seat " + seats + " has been released. If the bus has not yet left your stop, open the map and book again.",
       url: "/map",
     },
     trip_changed: {

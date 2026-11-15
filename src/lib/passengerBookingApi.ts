@@ -313,3 +313,27 @@ export async function cancelBooking(
     }),
   });
 }
+
+/** Is there a "Did you board the bus?" question open for this booking? */
+export async function getReleaseCase(reference: string): Promise<{
+  open: boolean;
+  case_id?: string;
+  state?: string;
+  deadline_at?: string;
+}> {
+  return request(`/booking/release-case`, {
+    method: "POST",
+    body: JSON.stringify({ reference, anonymous_id: getOrCreateAnonymousId() }),
+  });
+}
+
+/** Answer the question: true = I boarded, false = I did not board. */
+export async function answerReleaseCase(
+  reference: string,
+  boarded: boolean
+): Promise<{ success: boolean; result?: string; error?: string }> {
+  return request(`/booking/release-answer`, {
+    method: "POST",
+    body: JSON.stringify({ reference, boarded, anonymous_id: getOrCreateAnonymousId() }),
+  });
+}
