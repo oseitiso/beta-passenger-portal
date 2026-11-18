@@ -20,6 +20,8 @@ export interface PretripSeatPlan {
   seats: PretripSeat[];
   seatConfig: unknown;
   driverSide: "LEFT" | "RIGHT";
+  mode?: "SEATS" | "COUNTER";
+  free?: number;
   error?: string;
 }
 
@@ -28,6 +30,7 @@ export interface PretripView {
   state: "HELD" | "CLAIMED" | "BOARDED" | "RELEASED" | "CANCELLED";
   release_reason: string | null;
   seat_numbers: number[];
+  seats?: number;
   pin: string;
   name: string | null;
   operator: string | null;
@@ -66,12 +69,16 @@ export async function fetchPretripSeats(tripId: string, toStopId: string): Promi
       seats?: PretripSeat[];
       seat_config?: unknown;
       driver_side?: string;
+      mode?: string;
+      free?: number;
     }>("get_pretrip_seats", { p_trip_id: tripId, p_to_stop_id: toStopId });
     if (!r.success) return { seats: [], seatConfig: null, driverSide: "RIGHT", error: r.error ?? "Seats are not available." };
     return {
       seats: r.seats ?? [],
       seatConfig: r.seat_config ?? null,
       driverSide: r.driver_side === "LEFT" ? "LEFT" : "RIGHT",
+      mode: r.mode === "COUNTER" ? "COUNTER" : "SEATS",
+      free: typeof r.free === "number" ? r.free : undefined,
     };
   } catch {
     return { seats: [], seatConfig: null, driverSide: "RIGHT", error: NET_ERROR };
@@ -110,6 +117,7 @@ export async function bookPretrip(args: {
   tripId: string;
   toStopId: string;
   seatIds: string[];
+  quantity?: number;
   name: string;
   phone: string;
   remind: boolean;
@@ -120,6 +128,7 @@ export async function bookPretrip(args: {
       p_trip_id: args.tripId,
       p_to_stop_id: args.toStopId,
       p_seat_ids: args.seatIds,
+      p_quantity: args.quantity ?? null,
       p_anonymous_id: getOrCreateAnonymousId(),
       p_name: args.name,
       p_phone: args.phone,
@@ -138,6 +147,7 @@ export interface MyPretripTrip {
   trip_id: string;
   state: "HELD" | "CLAIMED" | "BOARDED";
   seat_numbers: number[];
+  seats?: number;
 }
 
 /** Trips on which this device already holds seats. */

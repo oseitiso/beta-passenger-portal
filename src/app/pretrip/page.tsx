@@ -23,6 +23,13 @@ interface Pos {
   accuracy: number;
 }
 
+function seatLabel(v: PretripView): string {
+  return v.seat_numbers.length > 0 ? v.seat_numbers.join(" + ") : String(v.seats ?? 1);
+}
+function seatWord(v: PretripView): string {
+  const n = v.seat_numbers.length > 0 ? v.seat_numbers.length : v.seats ?? 1;
+  return n > 1 ? "Seats" : "Seat";
+}
 export default function MyPretripPage() {
   const [views, setViews] = useState<Record<string, PretripView>>({});
   const [missing, setMissing] = useState<string[]>([]);
@@ -131,7 +138,7 @@ export default function MyPretripPage() {
   }
 
   async function cancel(v: PretripView) {
-    if (!window.confirm("Give up seat " + v.seat_numbers.join(", ") + "?")) return;
+    if (!window.confirm(v.seat_numbers.length > 0 ? "Give up seat " + v.seat_numbers.join(", ") + "?" : "Give up this booking?")) return;
     setBusyRef(v.reference);
     const r = await cancelPretripRequest(v.reference);
     setBusyRef(null);
@@ -222,10 +229,10 @@ export default function MyPretripPage() {
                       </div>
                       <div className="text-right">
                         <div className="text-[9px] font-semibold uppercase tracking-widest text-neutral-500">
-                          {v.seat_numbers.length > 1 ? "Seats" : "Seat"}
+                          {seatWord(v)}
                         </div>
                         <div className="text-4xl font-black leading-none text-orange-400">
-                          {v.seat_numbers.join(" + ")}
+                          {seatLabel(v)}
                         </div>
                       </div>
                     </div>

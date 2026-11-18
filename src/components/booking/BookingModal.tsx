@@ -83,8 +83,18 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
     return routeStops[routeStops.length - 1]?.stop_id ?? "";
   }, [bus.segment_availability, routeStops]);
 
-  const [fromStopId, setFromStopId] = useState<string>(defaultFromId);
-  const [toStopId, setToStopId] = useState<string>(defaultToId);
+  const freeStart = useMemo(() => {
+    const free = bus.free_boarding_stop_ids;
+    if (!free || free.length === 0 || bus.segment_availability?.from_stop_id) return { from: "", to: "" };
+    const fromIdx = routeStops.findIndex((s) => s.boardable && free.includes(s.stop_id));
+    if (fromIdx === -1) return { from: "", to: "" };
+    let j = fromIdx + 1;
+    while (j < routeStops.length - 1 && free.includes(routeStops[j].stop_id)) j++;
+    return { from: routeStops[fromIdx].stop_id, to: routeStops[Math.min(j, routeStops.length - 1)].stop_id };
+  }, [bus.free_boarding_stop_ids, bus.segment_availability, routeStops]);
+
+  const [fromStopId, setFromStopId] = useState<string>(freeStart.from || defaultFromId);
+  const [toStopId, setToStopId] = useState<string>(freeStart.to || defaultToId);
 
   useEffect(() => {
     logBookingStarted(bus.trip_id, defaultFromId || null, defaultToId || null);
@@ -104,6 +114,44 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
 
   const fromStop = useMemo(() => routeStops.find((s) => s.stop_id === fromStopId), [routeStops, fromStopId]);
   const toStop = useMemo(() => routeStops.find((s) => s.stop_id === toStopId), [routeStops, toStopId]);
+
+  // Stops where the bus will already be full when it arrives
+  const [freeIds, setFreeIds] = useState<string[] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    supabase.rpc("trip_free_boarding_stops", { p_trip_id: bus.trip_id }).then(({ data, error }) => {
+      if (!cancelled && !error && Array.isArray(data)) setFreeIds(data as string[]);
+    });
+    return () => { cancelled = true; };
+  }, [bus.trip_id]);
+
+  const effFree: string[] | null = freeIds ?? bus.free_boarding_stop_ids ?? null;
+  const isFullStop = (id: string) => {
+    if (effFree == null) return false;
+    const idx = routeStops.findIndex((s) => s.stop_id === id);
+    return idx >= 0 && idx < routeStops.length - 1 && !effFree.includes(id);
+  };
+  const runEndIdx = useMemo(() => {
+    if (effFree == null) return Infinity;
+    const fi = routeStops.findIndex((s) => s.stop_id === fromStopId);
+    if (fi === -1) return Infinity;
+    let j = fi + 1;
+    while (j < routeStops.length - 1 && effFree.includes(routeStops[j].stop_id)) j++;
+    return j;
+  }, [effFree, routeStops, fromStopId]);
+  const beyondRun = (id: string) => routeStops.findIndex((s) => s.stop_id === id) > runEndIdx;
+
+  useEffect(() => {
+    if (effFree == null || !fromStopId) return;
+    const fi = routeStops.findIndex((s) => s.stop_id === fromStopId);
+    if (fi >= 0 && fi < routeStops.length - 1 && !effFree.includes(fromStopId)) {
+      const ff = routeStops.find((s) => s.boardable && effFree.includes(s.stop_id));
+      if (ff) setFromStopId(ff.stop_id);
+      return;
+    }
+    const ti = routeStops.findIndex((s) => s.stop_id === toStopId);
+    if (runEndIdx !== Infinity && ti > runEndIdx) setToStopId(routeStops[runEndIdx].stop_id);
+  }, [effFree, fromStopId, toStopId, runEndIdx, routeStops]);
 
   const alightingOptions = useMemo(() => {
     const fromIndex = routeStops.findIndex((s) => s.stop_id === fromStopId);
@@ -199,10 +247,28 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
   // Keep the seat map live while the passenger is choosing.
   useEffect(() => {
     if (stage !== "seat-selection" || loadingSeats) return;
-    const t = setInterval(() => { void refreshTakenSeats(); }, 5000);
+    const t = setInterval(() => { if (!document.hidden) void refreshTakenSeats(); }, 15000);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stage, loadingSeats, bus.trip_id, fromStopId, toStopId]);
+
+  // Live signal: the database tells us the moment a seat is taken or released
+  useEffect(() => {
+    if (stage !== "seat-selection") return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const ch = supabase
+      .channel(`trip-seats:${bus.trip_id}`)
+      .on("broadcast", { event: "seats_changed" }, () => {
+        if (timer) return;
+        timer = setTimeout(() => { timer = null; void refreshTakenSeats(); }, 400);
+      })
+      .subscribe();
+    return () => {
+      if (timer) clearTimeout(timer);
+      void supabase.removeChannel(ch);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stage, bus.trip_id, fromStopId, toStopId]);
 
   const proceedToSeats = async () => {
     setStage("seat-selection");
@@ -258,10 +324,20 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
     }
   };
 
-  const confirmSeats = () => {
+  const confirmSeats = async () => {
     if (selectedSeatIds.length !== seats) {
       setErrorMsg(`Please select exactly ${seats} seats.`);
       return;
+    }
+    // Last-moment check: a seat may have been taken since the last refresh
+    const latest = await refreshTakenSeats();
+    if (latest) {
+      const lost = selectedSeatIds.filter((id) => latest.includes(id));
+      if (lost.length > 0) {
+        setSelectedSeatIds((prev) => prev.filter((id) => !latest.includes(id)));
+        setErrorMsg(lost.length === 1 ? "One of your seats was just taken. Please choose another." : `${lost.length} of your seats were just taken. Please choose others.`);
+        return;
+      }
     }
     setErrorMsg(null);
     setStage("form");
@@ -361,7 +437,7 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
     phoneLocal.length === PHONE_DIGITS &&
     seats >= 1 && seats <= 10 &&
     Boolean(fromStop) && Boolean(toStop) &&
-    fromStop!.boardable === true &&
+    fromStop!.boardable === true && !isFullStop(fromStopId) &&
     routeStops.findIndex((s) => s.stop_id === toStopId) > routeStops.findIndex((s) => s.stop_id === fromStopId) &&
     (!ENABLE_SEAT_SELECTION || noSeatMap || selectedSeatIds.length === seats);
 
@@ -407,7 +483,7 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
                   {!hasAnyBoardableStop && <option value="">No stops available to board right now</option>}
                   {hasAnyBoardableStop && !fromStopId && <option value="">Select a boarding stop…</option>}
                   {routeStops.map((stop) => (
-                    <option key={stop.stop_id} value={stop.stop_id} disabled={!stop.boardable}>
+                    <option key={stop.stop_id} value={stop.stop_id} disabled={!stop.boardable || isFullStop(stop.stop_id)}>{stop.boardable && isFullStop(stop.stop_id) ? "Full - " : ""}
                       {stop.name} {!stop.boardable ? `— ${reasonLabel(stop.unboardable_reason)}` : ""}
                     </option>
                   ))}
@@ -417,7 +493,7 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
                 <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-neutral-400"><MapPin className="h-3 w-3" /> Alighting stop</label>
                 <select value={toStopId} onChange={(e) => setToStopId(e.target.value)} disabled={!fromStopId || alightingOptions.length === 0} className="w-full rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 focus:border-orange-600 focus:outline-none disabled:opacity-50">
                   {(!fromStopId || alightingOptions.length === 0) && <option value="">{fromStopId ? "No stops available after your boarding stop." : "Select a boarding stop first."}</option>}
-                  {alightingOptions.map((stop) => <option key={stop.stop_id} value={stop.stop_id}>{stop.name}</option>)}
+                  {alightingOptions.map((stop) => <option key={stop.stop_id} value={stop.stop_id} disabled={beyondRun(stop.stop_id)}>{stop.name}{beyondRun(stop.stop_id) ? " (full ahead)" : ""}</option>)}
                 </select>
               </div>
               <div className="mb-3">

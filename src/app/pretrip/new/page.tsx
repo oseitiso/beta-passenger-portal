@@ -32,6 +32,7 @@ function NewPretrip() {
   const [plan, setPlan] = useState<PretripSeatPlan | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
+  const [qty, setQty] = useState(1);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [remind, setRemind] = useState(true);
@@ -53,6 +54,7 @@ function NewPretrip() {
   }, [tripId, toId]);
 
   const seats = plan?.seats ?? null;
+  const counter = plan?.mode === "COUNTER";
   const takenIds = (seats ?? []).filter((x) => x.taken).map((x) => x.id);
   const pickedNumbers = (seats ?? []).filter((x) => picked.includes(x.id)).map((x) => x.seat_number);
 
@@ -62,11 +64,12 @@ function NewPretrip() {
 
   async function submit() {
     setError(null);
-    if (picked.length === 0) return setError("Choose 1 or 2 seats.");
+    if (!counter && picked.length === 0) return setError("Choose 1 or 2 seats.");
+    if (counter && qty > (plan?.free ?? 0)) return setError("Only " + (plan?.free ?? 0) + " seat(s) are free for this journey.");
     if (name.trim().length < 2) return setError("Enter your name.");
     if (!/^\+?(267)?\s?\d{8}$/.test(phone.replace(/[\s-]/g, ""))) return setError("Enter your 8-digit phone number.");
     setBusy(true);
-    const r = await bookPretrip({ tripId, toStopId: toId, seatIds: picked, name: name.trim(), phone, remind });
+    const r = await bookPretrip({ tripId, toStopId: toId, seatIds: counter ? [] : picked, quantity: counter ? qty : undefined, name: name.trim(), phone, remind });
     setBusy(false);
     if (!r.ok || !r.reference) {
       setError(r.error ?? "Could not save the request.");
@@ -97,6 +100,12 @@ function NewPretrip() {
 
       <main className="w-full max-w-2xl px-4">
         <h1 className="text-3xl font-bold">Choose your seat</h1>
+        <div className="mt-3 rounded-xl border border-orange-900/50 bg-orange-950/20 p-3">
+          <div className="text-[10px] font-semibold uppercase tracking-widest text-orange-400">Your journey</div>
+          <div className="mt-0.5 text-base font-semibold text-white">
+            {fromName || "First stop"} <span className="text-neutral-500">&rarr;</span> {toName || "your drop-off stop"}
+          </div>
+        </div>
         <p className="mt-2 text-sm text-neutral-400">
           {[operator, route].filter(Boolean).join(" - ")}
           {validTime ? " - " + formatDay(departs) + ", " + formatTime(departs) : ""}
@@ -118,7 +127,31 @@ function NewPretrip() {
           </div>
         ) : (
           <>
-            <div className="mt-5 rounded-2xl border border-neutral-700/60 bg-neutral-900 p-4">
+            {counter ? (
+<div className="mt-5 rounded-2xl border border-neutral-700/60 bg-neutral-900 p-4 text-center">
+              <div className="text-sm font-medium text-neutral-100">How many seats?</div>
+              <div className="mt-1 text-xs text-neutral-500">
+                This bus has no seat map, so your seat is shown to you when you board. {plan?.free ?? 0} free for your journey.
+              </div>
+              <div className="mt-3 flex justify-center gap-2">
+                {[1, 2].map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => setQty(n)}
+                    disabled={n > (plan?.free ?? 0)}
+                    className={
+                      "h-12 w-16 rounded-lg border text-lg font-bold disabled:opacity-40 " +
+                      (qty === n ? "border-orange-500 bg-orange-600 text-white" : "border-neutral-700 bg-neutral-900 text-neutral-200")
+                    }
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+            </div>
+) : (
+<div className="mt-5 rounded-2xl border border-neutral-700/60 bg-neutral-900 p-4">
               <div className="mb-2 text-center text-[11px] text-neutral-500">Choose up to 2 seats</div>
               <PassengerSeatMap
                 seats={seats}
@@ -130,6 +163,7 @@ function NewPretrip() {
                 seatConfig={plan?.seatConfig ?? null}
               />
             </div>
+)}
 
             <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
               <label className="text-xs text-neutral-400">
@@ -164,11 +198,11 @@ function NewPretrip() {
 
             <button
               onClick={submit}
-              disabled={busy || picked.length === 0}
+              disabled={busy || (!counter && picked.length === 0) || (counter && (plan?.free ?? 0) < 1)}
               className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-orange-600 px-4 py-3 text-sm font-semibold text-white hover:bg-orange-500 disabled:opacity-50"
             >
               {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-              {pickedNumbers.length > 0 ? "Hold seat " + pickedNumbers.join(" and ") : "Choose a seat"}
+              {counter ? "Hold " + qty + (qty === 1 ? " seat" : " seats") : pickedNumbers.length > 0 ? "Hold seat " + pickedNumbers.join(" and ") : "Choose a seat"}
             </button>
           </>
         )}

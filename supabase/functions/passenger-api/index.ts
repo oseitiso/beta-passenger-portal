@@ -17,6 +17,7 @@ import postgres from "https://esm.sh/postgres@3.4.4";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
+  "Access-Control-Max-Age": "86400",
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "GET, OPTIONS",
@@ -646,7 +647,7 @@ async function fetchActiveTrips(opts: {
         if (fromStop && toStop && fromStop.stop_id !== toStop.stop_id) {
           const rows = await sql<
             { seats: number }[]
-          >`select public.segment_available_seats(${t.trip_id}::uuid, ${fromStop.stop_id}::uuid, ${toStop.stop_id}::uuid) as seats`;
+          >`select public.trip_pair_availability(${t.trip_id}::uuid, ${fromStop.stop_id}::uuid, ${toStop.stop_id}::uuid) as seats`;
           const seats = rows[0]?.seats ?? 0;
           trip.segment_availability = {
             seats_available: seats,
@@ -657,6 +658,18 @@ async function fetchActiveTrips(opts: {
       } catch (e) {
         console.error("[fetchActiveTrips] segment seats error:", e);
         reportToSentry(e?.message ?? "segment seats failed", e, { step: "segment_available_seats" });
+      }
+    }
+
+    const cap = t.vehicle_capacity;
+    const onboard = t.current_passenger_count ?? t.passenger_count ?? 0;
+    if (cap != null && onboard >= cap && t.route_id) {
+      try {
+        const freeRows = await sql<{ ids: string[] | null }[]>`select public.trip_free_boarding_stops(${t.trip_id}::uuid)::text[] as ids`;
+        (trip as any).free_boarding_stop_ids = freeRows[0]?.ids ?? [];
+      } catch (e) {
+        console.error("[fetchActiveTrips] free stops error:", e);
+        reportToSentry(e?.message ?? "free stops failed", e, { step: "trip_free_boarding_stops" });
       }
     }
 

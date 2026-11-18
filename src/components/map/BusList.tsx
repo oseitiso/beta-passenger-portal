@@ -15,9 +15,12 @@ import {
   CheckCircle2,
   AlertCircle,
   WifiOff,
+  CalendarClock,
 } from "lucide-react";
 import type { PublicBus } from "@/lib/passengerApi";
 import type { BookingDetail } from "@/lib/passengerBookingApi";
+import { useRouter } from "next/navigation";
+import { fetchDepartingToday, formatTime, setLastSearch, type DepartingTrip } from "@/lib/upcoming";
 
 interface BusListProps {
   buses: PublicBus[];
@@ -196,7 +199,7 @@ export function BusList({
           <div className="flex flex-col items-center justify-center px-6 py-12 text-center">
             <Bus className="mb-2 h-8 w-8 text-neutral-600" />
             <p className="text-sm font-medium text-neutral-400">
-              {stale ? "No buses were on the road at the last update" : "No other buses on the road"}
+              {stale ? "No buses were on the road at the last update" : "No buses on the road right now"}
             </p>
             {(activeBooking || recentlyEndedBooking) && (
               <p className="mt-1 text-xs text-neutral-600">
@@ -297,6 +300,8 @@ export function BusList({
             })}
           </ul>
         )}
+
+        <DepartingToday />
       </div>
     </div>
   );
@@ -607,6 +612,85 @@ function BookingReceipt({
             <div className="mt-2 text-[10px] text-red-400">{cancelError}</div>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+function DepartingToday() {
+  const router = useRouter();
+  const [trips, setTrips] = useState<DepartingTrip[] | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const load = () => {
+      if (document.hidden) return;
+      fetchDepartingToday()
+        .then((t) => { if (alive) setTrips(t); })
+        .catch(() => { if (alive) setTrips((prev) => prev ?? []); });
+    };
+    load();
+    const id = setInterval(load, 60000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+
+  if (trips === null) return null;
+
+  const openTrip = (t: DepartingTrip) => {
+    setLastSearch(t.from_stop_id, t.to_stop_id);
+    router.push("/upcoming");
+  };
+
+  return (
+    <div className="border-t border-neutral-800">
+      <div className="flex items-center gap-1.5 border-b border-neutral-800 px-4 py-2 text-xs font-medium text-neutral-500">
+        <CalendarClock className="h-3.5 w-3.5" />
+        Departing today
+      </div>
+      {trips.length === 0 ? (
+        <div className="px-4 py-6 text-center">
+          <p className="text-sm text-neutral-400">No more departures scheduled today</p>
+          <button
+            onClick={() => router.push("/upcoming")}
+            className="mt-2 text-xs font-medium text-orange-400 hover:text-orange-300"
+          >
+            See the next 5 days
+          </button>
+        </div>
+      ) : (
+        <ul className="divide-y divide-neutral-800">
+          {trips.map((t) => (
+            <li key={t.trip_id}>
+              <button
+                onClick={() => openTrip(t)}
+                className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-neutral-900"
+              >
+                <span className="w-12 flex-shrink-0 text-base font-bold tabular-nums text-white">
+                  {formatTime(t.departs_at)}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-semibold text-neutral-100">
+                    {t.origin ?? "-"} <span className="text-neutral-600">&rarr;</span> {t.destination ?? "-"}
+                  </div>
+                  <div className="truncate text-[11px] text-neutral-500">
+                    {t.operator ?? "Operator"}
+                    {t.state === "TENTATIVE" ? " - bus not yet confirmed" : ""}
+                  </div>
+                </div>
+                {t.seats_free !== null && (
+                  <span
+                    className={
+                      "flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold " +
+                      (t.seats_free === 0 ? "bg-amber-950/60 text-amber-300" : "bg-neutral-800 text-neutral-200")
+                    }
+                  >
+                    {t.seats_free === 0 ? "Full" : t.seats_free + (t.seats_free === 1 ? " seat" : " seats")}
+                  </span>
+                )}
+              </button>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );

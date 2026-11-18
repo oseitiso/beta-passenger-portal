@@ -43,6 +43,7 @@ export default function UpcomingPage() {
   const [note, setNote] = useState<string | null>(null);
   const [canPush, setCanPush] = useState(true);
   const [iosInstall, setIosInstall] = useState(false);
+  const [confirmTrip, setConfirmTrip] = useState<UpcomingTrip | null>(null);
 
   useEffect(() => {
     setAlerted(getAlertedTrips());
@@ -107,6 +108,17 @@ export default function UpcomingPage() {
   const toStops = stops.filter((s) => s.can_alight && s.id !== from);
   const fromName = stops.find((s) => s.id === from)?.name ?? "";
   const toName = stops.find((s) => s.id === to)?.name ?? "";
+  const seatHref = (t: UpcomingTrip) =>
+    "/pretrip/new?" +
+    new URLSearchParams({
+      trip: t.trip_id,
+      to: t.to_stop_id ?? to,
+      o: t.operator ?? "",
+      r: t.route ?? "",
+      t: t.departs_at,
+      tn: t.to_stop_name ?? toName,
+      fn: t.from_stop_name ?? fromName,
+    }).toString();
 
   const selectCls =
     "mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2.5 text-sm text-neutral-100 focus:border-orange-500 focus:outline-none";
@@ -118,10 +130,64 @@ export default function UpcomingPage() {
           <ArrowLeft className="h-4 w-4" />
           Back to map
         </Link>
-        <Link href="/pretrip" className="text-xs text-orange-400 hover:text-orange-300">My seats</Link>
       </header>
 
       <main className="w-full max-w-2xl px-4">
+        {confirmTrip && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Confirm your journey"
+            className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-4 sm:items-center"
+            onClick={() => setConfirmTrip(null)}
+          >
+            <div
+              className="w-full max-w-md rounded-2xl border border-neutral-700 bg-neutral-900 p-5 shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="text-[11px] font-semibold uppercase tracking-widest text-orange-400">Confirm your journey</div>
+              <div className="mt-4 space-y-3">
+                <div>
+                  <div className="text-[10px] uppercase tracking-wider text-neutral-500">You board at</div>
+                  <div className="text-lg font-bold text-white">{confirmTrip.from_stop_name ?? fromName}</div>
+                </div>
+                <div>
+                  <div className="text-[10px] uppercase tracking-wider text-neutral-500">You get off at</div>
+                  <div className="text-lg font-bold text-white">{confirmTrip.to_stop_name ?? toName}</div>
+                </div>
+                <div className="text-sm text-neutral-300">
+                  {confirmTrip.operator ?? "Operator"} -{" "}
+                  {new Date(confirmTrip.departs_at).toLocaleDateString("en-GB", {
+                    weekday: "short",
+                    day: "numeric",
+                    month: "short",
+                    timeZone: "Africa/Gaborone",
+                  })}
+                  , {formatTime(confirmTrip.departs_at)}
+                </div>
+              </div>
+              <p className="mt-4 text-xs text-neutral-400">
+                Your seat is held for this journey only. If you are getting off before{" "}
+                {confirmTrip.to_stop_name ?? toName}, choose Change journey and pick your own To stop in the search first.
+              </p>
+              <div className="mt-5 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setConfirmTrip(null)}
+                  className="flex-1 rounded-lg border border-neutral-600 px-4 py-2.5 text-sm font-medium text-neutral-200 hover:bg-neutral-800"
+                >
+                  Change journey
+                </button>
+                <Link
+                  href={seatHref(confirmTrip)}
+                  className="flex-1 rounded-lg bg-orange-600 px-4 py-2.5 text-center text-sm font-semibold text-white hover:bg-orange-500"
+                >
+                  Yes, continue
+                </Link>
+              </div>
+            </div>
+          </div>
+        )}
         <div className="mb-2 flex items-center justify-between">
           <h1 className="text-3xl font-bold">Upcoming trips</h1>
           <button
@@ -137,8 +203,9 @@ export default function UpcomingPage() {
           </button>
         </div>
         <p className="mb-5 text-sm text-neutral-400">
-          Scheduled buses for the next 5 days. Get an alert the moment a bus starts its trip, then request a seat on
-          the map.
+          Enter your boarding and destination stops to see available buses, departure times and drop-off details. You can
+          request a seat in advance at the bus&apos;s starting stop. Boarding further along the route? Set an alert and
+          request your seat once the bus is on the road.
         </p>
 
         {stopsError && (
@@ -228,6 +295,8 @@ export default function UpcomingPage() {
             </div>
           ) : (
             trips?.map((t) => {
+              const fName = t.from_stop_name ?? fromName;
+              const tName = t.to_stop_name ?? toName;
               const on = alerted.includes(t.trip_id);
               const btn =
                 "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium disabled:opacity-50";
@@ -253,7 +322,7 @@ export default function UpcomingPage() {
                           )}
                         </div>
                         <div className="truncate text-[11px] text-neutral-400">
-                          {t.state === "LIVE" || !t.from_time_known ? t.origin ?? "" : fromName}
+                          {t.state === "LIVE" || !t.from_time_known ? t.origin ?? "" : fName}
                         </div>
                       </div>
                       <div className="flex w-10 flex-shrink-0 items-center">
@@ -269,7 +338,7 @@ export default function UpcomingPage() {
                         >
                           {t.to_time_known ? formatTime(t.at_to) : "Time not set"}
                         </div>
-                        <div className="truncate text-[11px] text-neutral-400">{toName}</div>
+                        <div className="truncate text-[11px] text-neutral-400">{tName}</div>
                       </div>
                     </div>
 
@@ -281,29 +350,19 @@ export default function UpcomingPage() {
                           href="/pretrip"
                           className={btn + " border border-green-900/60 bg-green-950/40 text-green-300 hover:bg-green-950/70"}
                         >
-                          {mine[t.trip_id].seat_numbers.length > 1 ? "Seats " : "Seat "}
-                          {mine[t.trip_id].seat_numbers.join(" + ")}{" "}
+                          {mine[t.trip_id].seat_numbers.length === 0 ? "" : mine[t.trip_id].seat_numbers.length > 1 ? "Seats " : "Seat "}
+                          {mine[t.trip_id].seat_numbers.length === 0 ? (mine[t.trip_id].seats ?? 1) + ((mine[t.trip_id].seats ?? 1) > 1 ? " seats" : " seat") : mine[t.trip_id].seat_numbers.join(" + ")}{" "}
                           {mine[t.trip_id].state === "BOARDED" ? "boarded" : "requested"}
                         </Link>
                       ) : t.can_pretrip && (
-                        <Link
-                          href={
-                            "/pretrip/new?" +
-                            new URLSearchParams({
-                              trip: t.trip_id,
-                              to,
-                              o: t.operator ?? "",
-                              r: t.route ?? "",
-                              t: t.departs_at,
-                              tn: toName,
-                              fn: fromName,
-                            }).toString()
-                          }
+                        <button
+                          type="button"
+                          onClick={() => setConfirmTrip(t)}
                           className={btn + " bg-orange-600 text-white hover:bg-orange-500"}
                         >
                           Request a seat
                           {typeof t.pretrip_seats_free === "number" ? " - " + t.pretrip_seats_free + " free" : ""}
-                        </Link>
+                        </button>
                       )}
                       {t.state === "LIVE" ? (
                         <Link href="/map" className={btn + " bg-orange-600 text-white hover:bg-orange-500"}>

@@ -28,6 +28,7 @@ import {
 } from "@/lib/botswanaLocations";
 import { BusDetailDrawer } from "@/components/map/BusDetailDrawer";
 import { BusList } from "@/components/map/BusList";
+import { fetchMyPretripTrips } from "@/lib/pretrip";
 import {
   FilterControls,
   type FilterMode,
@@ -375,6 +376,24 @@ export default function MapPage() {
   const hasLoadedRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedBusId, setSelectedBusId] = useState<string | null>(null);
+  const [hasPretripSeat, setHasPretripSeat] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    const check = () => {
+      if (document.hidden) return;
+      void fetchMyPretripTrips().then((m) => {
+        if (alive) setHasPretripSeat(Object.values(m).some((x) => x.state === "HELD" || x.state === "CLAIMED"));
+      });
+    };
+    check();
+    const id = setInterval(check, 45000);
+    document.addEventListener("visibilitychange", check);
+    return () => {
+      alive = false;
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", check);
+    };
+  }, []);
   const busesWithMatchedTracks = useMemo(() => buses.map((bus) => {
     const track = matchedTracks[bus.trip_id];
     const sourceAt = track ? new Date(track.source_recorded_at).getTime() : NaN;
@@ -645,12 +664,12 @@ export default function MapPage() {
       }
     };
     void run();
-    const timer = setInterval(run, 20_000);
-    document.addEventListener("visibilitychange", run);
+    const timer = setInterval(() => { if (!document.hidden) void run(); }, 20_000);
+    const onVisibleSync = () => { if (!document.hidden) void run(); }; document.addEventListener("visibilitychange", onVisibleSync);
     return () => {
       cancelled = true;
       clearInterval(timer);
-      document.removeEventListener("visibilitychange", run);
+      document.removeEventListener("visibilitychange", onVisibleSync);
     };
   }, [mounted, refreshActiveBooking, showToast]);
   useEffect(() => {
@@ -891,7 +910,7 @@ export default function MapPage() {
       }
     };
     poll();
-    const id = setInterval(poll, 15000);
+    const id = setInterval(() => { if (!document.hidden) void poll(); }, 30000);
     return () => {
       stopped = true;
       clearInterval(id);
@@ -1017,7 +1036,15 @@ export default function MapPage() {
             <span className="h-2 w-2 animate-pulse rounded-full bg-green-500" />
             <span className="text-xs text-neutral-400">Live</span>
           </span>
-          <button
+          {hasPretripSeat && (
+            <a
+              href="/pretrip"
+              className="flex items-center gap-1.5 rounded-lg border border-green-900/60 bg-green-950/40 px-3 py-1.5 text-xs font-medium text-green-300 hover:bg-green-950/70"
+            >
+              <Ticket className="h-3.5 w-3.5" />
+              My seat
+            </a>
+          )}<button
             onClick={fetchBuses}
             disabled={loading}
             className="rounded-lg border border-neutral-700 p-2 hover:bg-neutral-800 disabled:opacity-50"

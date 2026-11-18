@@ -72,6 +72,7 @@ export interface PublicBus {
     operator_has_logo?: boolean;
   };
   status: string;
+  free_boarding_stop_ids?: string[] | null;
   segment_availability?: {
     seats_available: number;
     from_stop_id: string;
@@ -113,8 +114,10 @@ export async function getActiveBuses(opts?: {
   if (opts?.from) params.set("from", opts.from);
   if (opts?.to) params.set("to", opts.to);
   const q = params.toString();
-  const path = `/active-buses${q ? `?${q}` : ""}`;
-  const data = await get<{ buses: PublicBus[]; count: number }>(path);
+  const url = `/api/active-buses${q ? `?${q}` : ""}`;
+  const res = await fetch(url, { method: "GET", headers: { Accept: "application/json" }, cache: "no-store" });
+  if (!res.ok) throw new Error(`Passenger API error ${res.status}`);
+  const data = (await res.json()) as { buses: PublicBus[]; count: number };
   return data.buses;
 }
 

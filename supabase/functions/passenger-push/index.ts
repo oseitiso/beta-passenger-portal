@@ -6,6 +6,7 @@ import webpush from "npm:web-push@3.6.7";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
+  "Access-Control-Max-Age": "86400",
   "Access-Control-Allow-Headers": "content-type, authorization, apikey, x-client-info",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };

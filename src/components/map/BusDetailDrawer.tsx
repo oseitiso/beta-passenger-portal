@@ -263,10 +263,13 @@ export function BusDetailDrawer({
       ? Math.min(100, Math.round((passengers / capacity) * 100))
       : 0;
 
+  const freeStops = bus.free_boarding_stop_ids ?? null;
+  const fullNow = capacity != null && passengers >= capacity;
+  const seatAhead = fullNow && freeStops != null && freeStops.length > 0;
+  const segSeats = bus.segment_availability?.seats_available;
   const canBook =
-    status === "IN_PROGRESS" &&
-    capacity != null &&
-    passengers < capacity;
+    status === "IN_PROGRESS" && capacity != null &&
+    (segSeats != null ? segSeats > 0 : (!fullNow || seatAhead));
 
   return (
     <aside
@@ -527,7 +530,7 @@ export function BusDetailDrawer({
             title={!canBook ? "Bus is not available for booking" : "Request a seat"}
           >
             <Ticket className="h-4 w-4" />
-            {canBook ? "Request seat" : "Booking unavailable"}
+            {canBook ? (fullNow ? "Full now - request seat ahead" : "Request seat") : "Booking unavailable"}
           </button>
         )}
         {onCenter && (

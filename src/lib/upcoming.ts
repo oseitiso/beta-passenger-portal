@@ -26,6 +26,10 @@ export interface UpcomingTrip {
   pretrip_seats_free?: number | null;
   from_time_known: boolean;
   to_time_known: boolean;
+  from_stop_id?: string;
+  from_stop_name?: string;
+  to_stop_id?: string;
+  to_stop_name?: string;
 }
 
 async function rpc<T>(name: string, args: Record<string, unknown>): Promise<T> {
@@ -67,7 +71,7 @@ export async function searchUpcomingTrips(
 ): Promise<{ trips: UpcomingTrip[]; error?: string }> {
   const key = ["trips", fromStop, toStop, date].join("|");
   const data = await cached(key, () =>
-    rpc<{ success: boolean; error?: string; trips?: UpcomingTrip[] }>("get_upcoming_trips", {
+    rpc<{ success: boolean; error?: string; trips?: UpcomingTrip[] }>("get_upcoming_trips_near", {
       p_from_stop: fromStop,
       p_to_stop: toStop,
       p_date: date,
@@ -136,4 +140,25 @@ export function setLastSearch(from: string, to: string): void {
   } catch {
     /* ignore */
   }
+}
+
+// ---- departing today: every route, buses that have not started ----
+export interface DepartingTrip {
+  trip_id: string;
+  operator: string | null;
+  route: string | null;
+  origin: string | null;
+  destination: string | null;
+  departs_at: string;
+  from_stop_id: string;
+  to_stop_id: string;
+  state: "ASSIGNED" | "TENTATIVE";
+  seats_free: number | null;
+}
+
+export function fetchDepartingToday(): Promise<DepartingTrip[]> {
+  return cached("departing-today", async () => {
+    const d = await rpc<{ success: boolean; trips?: DepartingTrip[] }>("get_departing_today", {});
+    return d.success ? d.trips ?? [] : [];
+  });
 }
