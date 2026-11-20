@@ -1015,14 +1015,16 @@ export default function MapPage() {
     <div className="flex h-screen flex-col bg-neutral-950 text-neutral-100">
       <header className="flex items-center justify-between border-b border-neutral-800 bg-neutral-950 px-4 py-3">
         <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-600 font-bold text-white">
-            B
-          </div>
-          <div>
-            <div className="text-xs text-neutral-400">B-ETA</div>
-            <div className="font-semibold">Live Buses</div>
-          </div>
-        </div>
+  <img 
+    src="/icon.png" 
+    alt="B-ETA Logo" 
+    className="h-10 w-10 object-contain" 
+  />
+  <div>
+    <div className="text-xs text-neutral-500">B-ETA</div>
+    <div className="font-semibold text-neutral-100">Live Buses</div>
+  </div>
+</div>
 
         <div className="flex items-center gap-3 text-sm">
           <a

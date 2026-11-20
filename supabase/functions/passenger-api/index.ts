@@ -112,6 +112,7 @@ interface StopShape {
   fare_zone: number | null;
   fare_zone_distance_km: number | null;
   boardable: boolean;
+  dropoff_allowed: boolean;
   km_ahead?: number | null;
   eta_minutes?: number | null;
   unboardable_reason:
@@ -119,6 +120,7 @@ interface StopShape {
     | "too_close"
     | "destination"
     | "off_route"
+    | "no_pickup"
     | null;
 }
 
@@ -222,6 +224,8 @@ async function loadStopsForRouteWithBoardability(
       fare_zone: number | null;
       fare_zone_distance_km: string | number | null;
       stop_frac: number | null;
+      is_boarding: boolean;
+      is_dropoff: boolean;
     }[]
   >`
     select
@@ -235,6 +239,8 @@ async function loadStopsForRouteWithBoardability(
       rs.distance_from_origin_km,
       rs.fare_zone,
       rs.fare_zone_distance_km,
+      coalesce(rs.is_boarding, true) as is_boarding,
+      coalesce(rs.is_dropoff, true) as is_dropoff,
       case when rt.polyline_geom is not null and s.lat is not null and s.lng is not null
         then ST_LineLocatePoint(rt.polyline_geom, ST_SetSRID(ST_MakePoint(s.lng::numeric, s.lat::numeric), 4326))
         else null end as stop_frac
@@ -297,6 +303,9 @@ async function loadStopsForRouteWithBoardability(
     } else if (isLast) {
       boardable = false;
       unboardable_reason = "destination";
+    } else if (r.is_boarding === false) {
+      boardable = false;
+      unboardable_reason = "no_pickup";
     } else if (busDistanceKm != null) {
       if (busDistanceKm >= (stopKm as number)) {
         boardable = false;
@@ -328,6 +337,7 @@ async function loadStopsForRouteWithBoardability(
       fare_zone_distance_km:
         r.fare_zone_distance_km != null ? Number(r.fare_zone_distance_km) : null,
       boardable,
+      dropoff_allowed: r.is_dropoff !== false,
       unboardable_reason,
     };
   });
@@ -620,7 +630,7 @@ async function fetchActiveTrips(opts: {
 
     if (hasSegmentFilter && t.route_id && stops.length > 0) {
       try {
-        const fromStop = stops.reduce<StopShape | null>((best, s) => {
+        const fromStop = stops.filter((s) => s.unboardable_reason !== "no_pickup").reduce<StopShape | null>((best, s) => {
           if (s.lat == null || s.lng == null) return best;
           const d =
             Math.pow(s.lat - fromCoord!.lat, 2) +
@@ -632,7 +642,7 @@ async function fetchActiveTrips(opts: {
           return d < bd ? s : best;
         }, null);
 
-        const toStop = stops.reduce<StopShape | null>((best, s) => {
+        const toStop = stops.filter((s) => s.dropoff_allowed !== false).reduce<StopShape | null>((best, s) => {
           if (s.lat == null || s.lng == null) return best;
           const d =
             Math.pow(s.lat - toCoord!.lat, 2) +

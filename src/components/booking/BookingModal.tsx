@@ -30,12 +30,13 @@ const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "https://hzmpncdygk
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "sb_publishable_o2CPNKg49wAwJysjiGp08A_V0ZYeZjH";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-function reasonLabel(reason: PublicStop["unboardable_reason"]): string {
+function reasonLabel(reason: string | null | undefined): string {
   switch (reason) {
     case "bus_passed": return "Bus already passed";
     case "too_close": return "Bus arriving too soon";
     case "destination": return "Final stop";
     case "off_route": return "Not on route";
+    case "no_pickup": return "No pick-up here";
     default: return "Unavailable";
   }
 }
@@ -156,7 +157,7 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
   const alightingOptions = useMemo(() => {
     const fromIndex = routeStops.findIndex((s) => s.stop_id === fromStopId);
     if (fromIndex === -1) return [];
-    return routeStops.slice(fromIndex + 1);
+    return routeStops.slice(fromIndex + 1).filter((s) => (s as any).dropoff_allowed !== false);
   }, [routeStops, fromStopId]);
 
   useEffect(() => {
@@ -164,7 +165,7 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
     const fromIndex = routeStops.findIndex((s) => s.stop_id === fromStopId);
     const toIndex = routeStops.findIndex((s) => s.stop_id === toStopId);
     if (toIndex <= fromIndex) {
-      const next = routeStops[fromIndex + 1];
+      const next = routeStops.slice(fromIndex + 1).find((s) => (s as any).dropoff_allowed !== false);
       if (next) setToStopId(next.stop_id);
     }
   }, [fromStopId, toStopId, routeStops]);
@@ -363,6 +364,11 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
   const submit = async () => {
     if (!fromStop || !toStop) {
       setErrorMsg("Please choose both a boarding and alighting stop.");
+      setStage("error");
+      return;
+    }
+    if ((toStop as any).dropoff_allowed === false) {
+      setErrorMsg(`Passengers cannot get off at ${toStop.name}. Choose another destination.`);
       setStage("error");
       return;
     }
