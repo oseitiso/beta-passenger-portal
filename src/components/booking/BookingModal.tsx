@@ -447,6 +447,22 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
     routeStops.findIndex((s) => s.stop_id === toStopId) > routeStops.findIndex((s) => s.stop_id === fromStopId) &&
     (!ENABLE_SEAT_SELECTION || noSeatMap || selectedSeatIds.length === seats);
 
+  const [farePerSeat, setFarePerSeat] = useState<number | null>(null);
+  const routeIdForFare: string | null = (bus.route as any)?.route_id ?? null;
+  useEffect(() => {
+    setFarePerSeat(null);
+    if (!routeIdForFare || !fromStopId || !toStopId) return;
+    let cancelled = false;
+    supabase
+      .rpc("route_segment_fare", { p_route_id: routeIdForFare, p_from_stop_id: fromStopId, p_to_stop_id: toStopId })
+      .then(({ data, error }) => {
+        if (cancelled || error) return;
+        const n = Number(data);
+        if (data != null && Number.isFinite(n) && n > 0) setFarePerSeat(n);
+      });
+    return () => { cancelled = true; };
+  }, [routeIdForFare, fromStopId, toStopId]);
+
   const journeyReady = Boolean(fromStop) && Boolean(toStop);
 
   return (
@@ -472,7 +488,7 @@ export function BookingModal({ bus, routeStops, onClose, onSuccess }: BookingMod
                 <div className="mt-1 text-sm font-medium text-neutral-100">{bus.route?.name ?? "Route"}</div>
               </div>
               <div className="mb-4 rounded-lg border border-orange-900/40 bg-orange-950/20 p-3">
-                <div className="flex items-center gap-2 text-xs text-orange-400/80"><ArrowRight className="h-3 w-3" /> Your journey</div>
+                <div className="flex items-center justify-between text-xs text-orange-400/80"><span className="flex items-center gap-2"><ArrowRight className="h-3 w-3" /> Your journey</span>{farePerSeat != null && (<span className="font-semibold text-orange-300">P{(farePerSeat * seats).toFixed(2)}{seats > 1 ? ` (${seats} seats)` : ""}</span>)}</div>
                 {journeyReady ? (
                   <div className="mt-1 flex items-center gap-2 text-sm">
                     <span className="font-medium text-neutral-100">{fromStop!.name}</span>

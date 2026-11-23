@@ -179,7 +179,7 @@ export default function MyBookingPage() {
   const [cancelError, setCancelError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const [mounted, setMounted] = useState(false);
-  const [history, setHistory] = useState<BookingHistoryEntry[]>([]);
+  const [history, setHistory] = useState<BookingHistoryEntry[]>([]); const [openTripId, setOpenTripId] = useState<string | null>(null); useEffect(() => { if (!openTripId) return; const close = (e: MouseEvent) => { if ((e.target as HTMLElement | null)?.closest?.("[data-trip-row]")) return; setOpenTripId(null); }; document.addEventListener("click", close); return () => document.removeEventListener("click", close); }, [openTripId]);
 
   const inFlightRef = useRef(false);
 
@@ -478,7 +478,7 @@ export default function MyBookingPage() {
               <span className="text-xs text-neutral-500">({history.length})</span>
             </div>
             <ul className="space-y-2">
-              {history.map((entry) => <RecentTripRow key={entry.handoff_id} entry={entry} />)}
+              {history.map((entry) => <RecentTripRow key={entry.handoff_id} entry={entry} open={openTripId === entry.handoff_id} onToggle={() => setOpenTripId((cur) => (cur === entry.handoff_id ? null : entry.handoff_id))} />)}
             </ul>
           </section>
         )}
@@ -498,8 +498,8 @@ export default function MyBookingPage() {
   );
 }
 
-function RecentTripRow({ entry }: { entry: BookingHistoryEntry }) {
-  const [open, setOpen] = useState(false);
+function RecentTripRow({ entry, open, onToggle }: { entry: BookingHistoryEntry; open: boolean; onToggle: () => void }) {
+  
   const st = statusLabel(entry.handoff_status);
   const from = entry.from_stop_name ?? entry.route_origin ?? "—";
   const to = entry.to_stop_name ?? entry.route_destination ?? "—";
@@ -507,8 +507,8 @@ function RecentTripRow({ entry }: { entry: BookingHistoryEntry }) {
   const reportable = entry.handoff_status !== "COMPLETED" || Date.now() - entry.ended_at < 48 * 60 * 60 * 1000;
 
   return (
-    <li className="overflow-hidden rounded-xl border border-neutral-800 bg-neutral-900/30">
-      <button onClick={() => setOpen((v) => !v)} className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-neutral-900/60">
+    <li data-trip-row="" className="overflow-hidden rounded-xl border border-neutral-800 bg-neutral-900/30">
+      <button onClick={onToggle} className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-neutral-900/60">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className={`text-[10px] font-semibold uppercase tracking-wide ${st.colorClass}`}>{st.label}</span>
