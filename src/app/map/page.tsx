@@ -12,6 +12,7 @@ import {
   Loader2,
   BellRing,
   WifiOff,
+  GripHorizontal,
 } from "lucide-react";
 import {
   getActiveBuses,
@@ -256,7 +257,7 @@ function LocationSelect({
       </button>
 
       {open && (
-        <div className="absolute left-0 right-0 z-[1100] mt-1 max-h-80 overflow-hidden rounded-lg border border-neutral-700 bg-neutral-950 shadow-2xl">
+        <div className="absolute left-0 right-0 z-[1200] mt-1 max-h-80 overflow-hidden rounded-lg border border-neutral-700 bg-neutral-950 shadow-2xl">
           <div className="border-b border-neutral-800 p-2">
             <div className="flex items-center gap-2 rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1.5">
               <Search className="h-3.5 w-3.5 text-neutral-500" />
@@ -377,6 +378,35 @@ export default function MapPage() {
   const [error, setError] = useState<string | null>(null);
   const [selectedBusId, setSelectedBusId] = useState<string | null>(null);
   const [hasPretripSeat, setHasPretripSeat] = useState(false);
+  
+  // --- DRAGGABLE SEARCH BAR STATE ---
+  const [position, setPosition] = useState({ x: 16, y: 16 }); 
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+
+  const handlePointerDown = (e: React.PointerEvent) => {
+    setIsDragging(true);
+    setDragOffset({
+      x: e.clientX - position.x,
+      y: e.clientY - position.y,
+    });
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+
+  const handlePointerMove = (e: React.PointerEvent) => {
+    if (!isDragging) return;
+    setPosition({
+      x: e.clientX - dragOffset.x,
+      y: e.clientY - dragOffset.y,
+    });
+  };
+
+  const handlePointerUp = (e: React.PointerEvent) => {
+    setIsDragging(false);
+    e.currentTarget.releasePointerCapture(e.pointerId);
+  };
+  // ----------------------------------
+
   useEffect(() => {
     let alive = true;
     const check = () => {
@@ -523,7 +553,6 @@ export default function MapPage() {
       setBusesLoadedOnce(true);
       setError(null);
     } catch (e: any) {
-      // Keep the last known buses on screen and say what happened in plain words.
       const offline =
         typeof navigator !== "undefined" && navigator.onLine === false;
       const networkProblem =
@@ -545,8 +574,6 @@ export default function MapPage() {
     fetchRef.current = fetchBuses;
   }, [fetchBuses]);
 
-  // Try again the moment the phone gets a signal back, and keep the
-  // "updated … ago" label moving.
   useEffect(() => {
     const onOnline = () => fetchRef.current();
     window.addEventListener("online", onOnline);
@@ -647,8 +674,6 @@ export default function MapPage() {
     }
   }, []);
 
-  // Pre-trip passengers: a claimed or boarded seat becomes a normal ticket on the map,
-  // and an early departure is announced.
   useEffect(() => {
     if (!mounted) return;
     let cancelled = false;
@@ -742,7 +767,6 @@ export default function MapPage() {
     };
 
     document.addEventListener("visibilitychange", onVisible);
-
 
 
     const interval = setInterval(() => {
@@ -853,9 +877,6 @@ export default function MapPage() {
     return null;
   }, [activeBooking]);
 
-  // ─────────────────────────────────────────────────────────
-  // GROUP STOPS BY FARE ZONE (operator-defined)
-  // ─────────────────────────────────────────────────────────
   const groupedJourney = useMemo(() => {
     if (!bookedBus || !bookedBus.route?.stops) return null;
 
@@ -889,7 +910,6 @@ export default function MapPage() {
     return zones;
   }, [bookedBus]);
 
-  // "Did you board the bus?" question: opened when the bus moved on while this passenger had checked in at the stop.
   const [releaseCase, setReleaseCase] = useState<{ deadline_at?: string } | null>(null);
   const [releaseBusy, setReleaseBusy] = useState(false);
   const [releaseNote, setReleaseNote] = useState<string | null>(null);
@@ -1133,40 +1153,56 @@ export default function MapPage() {
             alightingStopName={activeBooking?.to_stop_name ?? null}
           />
 
+          {/* DRAGGABLE WIDGET CONTAINER */}
           <div
-            className="pointer-events-none absolute left-4 top-4 z-[1000] w-72 max-w-[calc(100%-2rem)] space-y-2"
+            style={{ left: `${position.x}px`, top: `${position.y}px` }}
+            className="absolute z-[1000] w-72 max-w-[calc(100%-2rem)]"
             onMouseEnter={() => setFilterHovered(true)}
             onMouseLeave={() => setFilterHovered(false)}
           >
             <div
-              className={`pointer-events-auto rounded-lg border border-neutral-800 bg-neutral-900/95 p-3 shadow-lg backdrop-blur transition-opacity duration-300 ${
+              className={`rounded-lg border border-neutral-800 bg-neutral-900/95 shadow-lg backdrop-blur transition-opacity duration-300 ${
                 filterIdle ? "opacity-60" : "opacity-100"
               }`}
             >
-              <LocationSelect
-                label="FROM"
-                value={origin}
-                onChange={setOrigin}
-                placeholder="Any origin"
-                showLocateButton
-                fallbackLocations={SORTED_LOCATIONS}
-                role="from"
-              />
+              {/* DRAG HANDLE */}
+              <div
+                onPointerDown={handlePointerDown}
+                onPointerMove={handlePointerMove}
+                onPointerUp={handlePointerUp}
+                className="flex h-6 w-full cursor-grab active:cursor-grabbing items-center justify-center bg-neutral-800/50 hover:bg-neutral-700/50 rounded-t-lg transition-colors"
+                style={{ touchAction: "none" }}
+                title="Drag to move"
+              >
+                <GripHorizontal className="h-4 w-4 text-neutral-500" />
+              </div>
 
-              <div className="mt-2">
+              <div className="p-3">
                 <LocationSelect
-                  label="TO"
-                  value={destination}
-                  onChange={setDestination}
-                  placeholder="Any destination"
+                  label="FROM"
+                  value={origin}
+                  onChange={setOrigin}
+                  placeholder="Any origin"
+                  showLocateButton
                   fallbackLocations={SORTED_LOCATIONS}
-                  role="to"
+                  role="from"
                 />
+
+                <div className="mt-2">
+                  <LocationSelect
+                    label="TO"
+                    value={destination}
+                    onChange={setDestination}
+                    placeholder="Any destination"
+                    fallbackLocations={SORTED_LOCATIONS}
+                    role="to"
+                  />
+                </div>
               </div>
             </div>
 
             <div
-              className={`pointer-events-auto transition-opacity duration-300 ${
+              className={`pointer-events-auto mt-2 transition-opacity duration-300 ${
                 filterIdle ? "opacity-60" : "opacity-100"
               }`}
             >
