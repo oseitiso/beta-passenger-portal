@@ -6,7 +6,14 @@ export default function Home() {
     <main className="min-h-screen bg-neutral-950 flex items-center justify-center px-6">
       <div className="text-center max-w-md">
         <div className="w-16 h-16 rounded-2xl bg-[#FF6B00]/15 flex items-center justify-center mx-auto mb-6">
-          <span className="text-[#FF6B00] text-3xl font-black">B</span>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/beta-logo.png"
+            alt="B-ETA logo"
+            width={29}
+            height={36}
+            className="h-9 w-auto"
+          />
         </div>
         <h1 className="text-3xl font-bold text-white tracking-tight">
           B-ETA

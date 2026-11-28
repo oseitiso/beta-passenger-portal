@@ -1,6 +1,7 @@
 // B-ETA Passenger API Edge Function — v2.8.0
 // v2.8.0 — Arrival times use the planned stop times of the route (trip_eta_plan): each stop carries its own eta_minutes, and a bus on a planned break reports live.break with the minutes left.
 // v2.7.1 — Server errors (HTTP 500), and the quiet failures that hide buses from a search or blank the boardable stops, are reported to Sentry when the secret SENTRY_DSN is set.
+// v2.9.0 - Operators whose passenger_visible switch is off are left out of the live bus list.
 // Deploy to: hzmpncdygkeqvoszunfm
 // Public-facing API for the passenger portal. Returns ONLY public bus data.
 //
@@ -31,7 +32,7 @@ const corsHeaders = {
 const SENTRY_DSN = Deno.env.get("SENTRY_DSN") ?? "";
 const SENTRY_ENV = Deno.env.get("SENTRY_ENVIRONMENT") ?? "production";
 const FN_NAME = "passenger-api";
-const FN_VERSION = "2.8.0";
+const FN_VERSION = "2.9.0";
 let sentryWindowStart = 0;
 let sentrySent = 0;
 
@@ -515,6 +516,7 @@ async function fetchActiveTrips(opts: {
     left join vehicle_current_state vcs on vcs.vehicle_id = t.vehicle_id
     left join lateral (select case when t.route_id is not null and vcs.latitude is not null and vcs.longitude is not null then public.trip_eta_plan(t.id, t.route_id, vcs.latitude, vcs.longitude, vcs.speed_kph) else null end as plan) ep on true
     where t.status = 'IN_PROGRESS'
+      AND coalesce(o.passenger_visible, true) = true
       AND vcs.latitude is not null
       AND vcs.longitude is not null
       AND vcs.last_position_at is not null
